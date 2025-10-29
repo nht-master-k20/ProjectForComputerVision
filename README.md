@@ -9,12 +9,13 @@ Xây dựng mô hình học máy có khả năng **phân loại các loại tổ
 ### 📂 Dataset sử dụng
 Dataset lấy từ bài báo khoa học Nature: 
 **SkinExplainer: A Comprehensive Dataset and Benchmark for Skin Disease Classification** 
+
 Link dataset: https://www.nature.com/articles/s41597-024-03743-w
 
-### 🧠 Phương pháp tiếp cận (Tóm tắt)
+### 🧠 Tóm tắt phương pháp tiếp cận
 
 
-### 🛠️ Công nghệ / Thư viện dự kiến sử dụng
+### 🛠️ Công nghệ, thư viện sử dụng
 
 
 ### 📈 Kết quả mong đợi
