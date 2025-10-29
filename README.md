@@ -25,17 +25,17 @@ Link dataset: https://www.nature.com/articles/s41597-024-03743-w
 
 ---
 
-### ⚙️ Quy tắc chung trong project
-Hệ thống cho phép tổ chức và thực thi các tác vụ thông qua từng **script module**. 
+### ⚙️ Cấu trúc project
+Tổ chức và thực thi thông qua từng **script module**. 
 Mỗi script được xây dựng dưới dạng **một Class chính**, trong đó bao gồm các **phương thức xử lý** logic cụ thể. 
 Việc thực thi script được điều phối tập trung thông qua file `main.py`.
 
-#### 1. Cấu trúc lưu trữ
+#### 1. Bố cục
 - Tất cả các script phải được đặt trong thư mục `scripts/`.
 - Dataset phải được đặt trong thư mục `dataset/`.
 - Mỗi file script tương ứng với **một tác vụ**.
 
-#### 2. Cấu trúc một script
+#### 2. Script
 - Mỗi script **phải có một class chính** đại diện cho tác vụ cần thực thi.
 - Bên trong class bao gồm các **hàm con (method)** phục vụ cho từng bước xử lý.
 - Class **bắt buộc phải có hàm `run()`** làm điểm vào chính của tác vụ.
