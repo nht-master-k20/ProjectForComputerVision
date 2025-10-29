@@ -1,5 +1,5 @@
-## **Phân Loại Các Loại Tổn Thương Trên Da**
-***Xử lý ảnh và thị giác máy tính - CS2203.CH200***
+# Phân Loại Các Loại Tổn Thương Trên Da
+**Xử lý ảnh và thị giác máy tính (CS2203.CH200)**
 
 ---
 
