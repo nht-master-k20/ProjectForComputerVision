@@ -45,8 +45,6 @@ Hệ thống cho phép tổ chức và thực thi các tác vụ thông qua từ
 Mỗi script được xây dựng dưới dạng **một Class chính**, trong đó bao gồm các **phương thức xử lý** logic cụ thể.  
 Việc thực thi script được điều phối tập trung thông qua file `main.py`.
 
----
-
 #### 1. Cấu trúc lưu trữ
 - Tất cả các script phải được đặt trong thư mục `scripts/`.
 - Dataset phải được đặt trong thư mục `dataset/`.
