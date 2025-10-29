@@ -11,14 +11,13 @@
 ---
 
 ### 🎯 Mục tiêu đề tài
-Xây dựng mô hình học máy có khả năng **phân loại các loại tổn thương trên da** từ hình ảnh, hỗ trợ nhận diện sớm các dấu hiệu bệnh lý về da liễu.  
-Đề tài hướng đến việc ứng dụng **Thị giác máy tính (Computer Vision)** và **Học sâu (Deep Learning)** để xử lý và phân tích hình ảnh da người.
+Xây dựng mô hình học máy có khả năng **phân loại các loại tổn thương trên da** từ hình ảnh, hỗ trợ nhận diện sớm các dấu hiệu bệnh lý về da liễu.
 
 ---
 
 ### 📂 Dataset sử dụng
-Dataset lấy từ bài báo khoa học Nature:  
-**SkinExplainer: A Comprehensive Dataset and Benchmark for Skin Disease Classification**  
+Dataset lấy từ bài báo khoa học Nature: 
+**SkinExplainer: A Comprehensive Dataset and Benchmark for Skin Disease Classification** 
 Link dataset: https://www.nature.com/articles/s41597-024-03743-w
 
 ---
@@ -39,10 +38,10 @@ Link dataset: https://www.nature.com/articles/s41597-024-03743-w
 
 ---
 
-### ⚙️ Quy tắc chung trong project
+## ⚙️ Quy tắc chung trong project
 
-Hệ thống cho phép tổ chức và thực thi các tác vụ thông qua từng **script module**.  
-Mỗi script được xây dựng dưới dạng **một Class chính**, trong đó bao gồm các **phương thức xử lý** logic cụ thể.  
+Hệ thống cho phép tổ chức và thực thi các tác vụ thông qua từng **script module**. 
+Mỗi script được xây dựng dưới dạng **một Class chính**, trong đó bao gồm các **phương thức xử lý** logic cụ thể. 
 Việc thực thi script được điều phối tập trung thông qua file `main.py`.
 
 #### 1. Cấu trúc lưu trữ
