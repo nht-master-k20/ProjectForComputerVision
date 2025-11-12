@@ -2,6 +2,9 @@
 # $ conda create --name <env> --file <this file>
 # platform: osx-arm64
 # created-by: conda 25.7.0
+albucore=0.0.24=pypi_0
+albumentations=2.0.8=pypi_0
+annotated-types=0.7.0=pypi_0
 aom=3.6.0=h313beb8_0
 appnope=0.1.4=pyhd8ed1ab_1
 asttokens=3.0.0=pyhd8ed1ab_1
@@ -120,11 +123,14 @@ prompt-toolkit=3.0.52=pyha770c72_0
 psutil=7.0.0=py311h254cc4a_0
 ptyprocess=0.7.0=pyhd8ed1ab_1
 pure_eval=0.2.3=pyhd8ed1ab_1
+pydantic=2.12.4=pypi_0
+pydantic-core=2.41.5=pypi_0
 pygments=2.19.2=pyhd8ed1ab_0
 pyparsing=3.2.0=py311hca03da5_0
 python=3.11.13=h19e8193_0
 python-dateutil=2.9.0post0=py311hca03da5_2
 pytz=2025.2=pypi_0
+pyyaml=6.0.3=pypi_0
 pyzmq=27.1.0=py311h854a7ef_0
 qtbase=6.7.3=h89abe44_4
 readline=8.3=h0b18652_0
@@ -132,14 +138,18 @@ scikit-learn=1.7.2=py311hc6ded6b_0
 scipy=1.16.2=py311h53ebd84_0
 seaborn=0.13.2=pypi_0
 setuptools=78.1.1=py311hca03da5_0
+simsimd=6.5.3=pypi_0
 six=1.17.0=py311hca03da5_0
 sqlite=3.50.2=h79febb2_1
 stack_data=0.6.3=pyhd8ed1ab_1
+stringzilla=4.2.3=pypi_0
 tesseract=5.2.0=h9e66425_3
 threadpoolctl=3.5.0=py311hb6e6a13_0
 tk=8.6.15=hcd8a7d5_0
 tornado=6.5.1=py311h80987f9_0
+tqdm=4.67.1=pypi_0
 traitlets=5.14.3=pyhd8ed1ab_1
+typing-inspection=0.4.2=pypi_0
 typing_extensions=4.15.0=pyhcf101f3_0
 tzdata=2025.2=pypi_0
 unicodedata2=15.1.0=py311h80987f9_1

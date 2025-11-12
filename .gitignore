@@ -1,1 +1,3 @@
 dataset/ISIC_2024_Training_Input/
+dataset/ISIC_2024_Training_Input_Augmented/
+scripts/__pycache__/
