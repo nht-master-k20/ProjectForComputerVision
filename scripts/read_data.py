@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import random
 import cv2
-import albumentations as A
+import albumentations
 from tqdm import tqdm
 
 
@@ -14,6 +14,7 @@ class ReadData:
     IMAGES_DIR = 'dataset/ISIC_2024_Training_Input'
     AUG_IMAGES_DIR = 'dataset/ISIC_2024_Training_Input_Augmented'
 
+    CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
     ID_COLUMN = 'isic_id'
     TARGET_COLUMN = 'malignant'
 
@@ -61,7 +62,6 @@ class ReadData:
 
         return train_df, val_df, test_df
 
-
     @staticmethod
     def plot_class_distribution(df: pd.DataFrame, target_col: str, title: str = "Phân bổ các lớp"):
         """
@@ -88,8 +88,7 @@ class ReadData:
         plt.show()
 
     @staticmethod
-    def show_sample_images(df: pd.DataFrame, target_col: str, n_samples_per_class: int = 4, 
-                           class_map: dict = {0: 'Lành tính', 1: 'Ác tính'}):
+    def show_sample_images(df: pd.DataFrame, target_col: str, class_map, n_samples_per_class):
 
         classes = df[target_col].unique()
         num_classes = len(classes)
@@ -116,21 +115,21 @@ class ReadData:
                 except Exception as e:
                     print(f"Lỗi khi đọc ảnh {img_path}: {e}")
                     
-        plt.suptitle(f"Ảnh mẫu ( câte {n_samples_per_class} ảnh / lớp)", fontsize=18)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.suptitle(f"Ảnh mẫu ({n_samples_per_class} ảnh mỗi lớp)", fontsize=18)
+        plt.tight_layout([0, 0.03, 1, 0.95])
         plt.show()
 
     @staticmethod
-    def get_augmentation_pipeline(img_size=256) -> A.Compose:
-        return A.Compose([
-            A.Resize(img_size, img_size),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5),
-            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.7),
-            A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.3),
-            A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.1, rotate_limit=15, p=0.5),
-            A.CoarseDropout(max_holes=8, max_height=img_size//16, max_width=img_size//16, 
+    def get_augmentation_pipeline(img_size=256) -> albumentations.Compose:
+        return albumentations.Compose([
+            albumentations.Resize(img_size, img_size),
+            albumentations.HorizontalFlip(p=0.5),
+            albumentations.VerticalFlip(p=0.5),
+            albumentations.RandomRotate90(p=0.5),
+            albumentations.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.7),
+            albumentations.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.3),
+            albumentations.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.1, rotate_limit=15, p=0.5),
+            albumentations.CoarseDropout(max_holes=8, max_height=img_size//16, max_width=img_size//16,
                              min_holes=4, min_height=img_size//20, min_width=img_size//20, 
                              p=0.3)
         ])
@@ -198,9 +197,8 @@ class ReadData:
         
         return train_df_balanced
 
-
     @classmethod
-    def show_augmentation_effect(cls, df: pd.DataFrame, augmentation_pipeline: A.Compose, n_examples: int = 5):
+    def show_augmentation_effect(cls, df: pd.DataFrame, augmentation_pipeline: albumentations.Compose, n_examples: int = 5):
         if df.empty:
             print("Lỗi: DataFrame rỗng, không thể chọn ảnh.")
             return
@@ -264,7 +262,7 @@ class ReadData:
 
             cls.plot_class_distribution(train_df_balanced, cls.TARGET_COLUMN, title="Phân bổ Lớp (Tập Train - SAU Cân Bằng)")
 
-            cls.show_sample_images(train_df_balanced, cls.TARGET_COLUMN)
+            cls.show_sample_images(train_df_balanced, cls.TARGET_COLUMN, cls.CLASS_MAP, n_samples_per_class=4)
 
             pipeline = cls.get_augmentation_pipeline()
             cls.show_augmentation_effect(train_df_balanced, pipeline, n_examples=5)
