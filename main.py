@@ -1,5 +1,4 @@
 import argparse
-
 from scripts.read_data import ReadData
 
 
