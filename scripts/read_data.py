@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 
 class ReadData:
-    CSV_PATH = 'dataset/ISIC_2024_Training_GroundTruth.csv'
+    GT_PATH = 'dataset/ISIC_2024_Training_GroundTruth.csv'
     IMAGES_DIR = 'dataset/ISIC_2024_Training_Input'
     AUG_IMAGES_DIR = 'dataset/ISIC_2024_Training_Input_Augmented'
     CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
@@ -18,30 +18,30 @@ class ReadData:
     ID_COLUMN = 'isic_id'
     TARGET_COLUMN = 'malignant'
 
-    @staticmethod
-    def load_isic_metadata(csv_path: str, images_dir: str, img_id_col: str = 'isic_id', img_ext: str = '.jpg') -> pd.DataFrame or None:
+    @classmethod
+    def load_isic_metadata(cls) -> pd.DataFrame or None:
         try:
-            df = pd.read_csv(csv_path)
-            df['image_path'] = df[img_id_col].apply(lambda x: os.path.join(images_dir, f"{x}{img_ext}"))
-            print(f"Tải thành công {len(df)} bản ghi từ {csv_path}")
+            df = pd.read_csv(cls.GT_PATH)
+            df['image_path'] = df[cls.ID_COLUMN].apply(lambda x: os.path.join(cls.IMAGES_DIR, f"{x}.jpg"))
+            print(f"Tải thành công {len(df)} bản ghi từ {cls.GT_PATH}")
             print(f"Ví dụ đường dẫn ảnh: {df['image_path'].iloc[0]}")
             return df
         except FileNotFoundError:
-            print(f"Lỗi: Không tìm thấy file tại {csv_path}")
+            print(f"Lỗi: Không tìm thấy file tại {cls.GT_PATH}")
             return None
         except KeyError:
-            print(f"Lỗi: Không tìm thấy cột ID hình ảnh '{img_id_col}' trong file CSV.")
+            print(f"Lỗi: Không tìm thấy cột ID hình ảnh '{cls.ID_COLUMN}' trong file CSV.")
             return None
 
-    @staticmethod
-    def split_data(df: pd.DataFrame, target_col: str, test_size: float = 0.2, val_size: float = 0.1, random_state: int = 42) -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
+    @classmethod
+    def split_data(cls, df: pd.DataFrame, test_size: float = 0.2, val_size: float = 0.1, random_state: int = 42) -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
         if (test_size + val_size) >= 1.0:
             raise ValueError("Tổng của test_size và val_size phải nhỏ hơn 1.0")
 
         train_val_df, test_df = train_test_split(
             df,
             test_size=test_size,
-            stratify=df[target_col],
+            stratify=df[cls.TARGET_COLUMN],
             random_state=random_state
         )
 
@@ -50,7 +50,7 @@ class ReadData:
         train_df, val_df = train_test_split(
             train_val_df,
             test_size=relative_val_size,
-            stratify=train_val_df[target_col],
+            stratify=train_val_df[cls.TARGET_COLUMN],
             random_state=random_state
         )
 
@@ -62,14 +62,14 @@ class ReadData:
 
         return train_df, val_df, test_df
 
-    @staticmethod
-    def plot_class_distribution(df: pd.DataFrame, target_col: str, title: str = "Phân bổ các lớp"):
+    @classmethod
+    def plot_class_distribution(cls, df: pd.DataFrame, title: str = ""):
         """
         Vẽ biểu đồ cột thể hiện số lượng mẫu của mỗi lớp.
         """
         plt.figure(figsize=(8, 5))
         # Sử dụng value_counts() để đếm số lượng mỗi lớp
-        class_counts = df[target_col].value_counts()
+        class_counts = df[cls.TARGET_COLUMN].value_counts()
         
         # Đặt tên lại cho các nhãn (ví dụ: 0 -> Lành tính, 1 -> Ác tính)
         class_labels = {0: 'Lành tính (0)', 1: 'Ác tính (1)'}
@@ -87,20 +87,19 @@ class ReadData:
             
         plt.show()
 
-    @staticmethod
-    def show_sample_images(df: pd.DataFrame, target_col: str, class_map, n_samples_per_class):
-
-        classes = df[target_col].unique()
+    @classmethod
+    def show_sample_images(cls, df: pd.DataFrame, n_samples_per_class):
+        classes = df[cls.TARGET_COLUMN].unique()
         num_classes = len(classes)
         
         fig, axes = plt.subplots(num_classes, n_samples_per_class, figsize=(n_samples_per_class * 3, num_classes * 3))
         
-        for i, cls in enumerate(classes):
-            image_paths = df[df[target_col] == cls]['image_path'].tolist()
+        for i, item in enumerate(classes):
+            image_paths = df[df[cls.TARGET_COLUMN] == item]['image_path'].tolist()
             
             sample_paths = random.sample(image_paths, min(n_samples_per_class, len(image_paths)))
             
-            class_name = class_map.get(cls, f"Lớp {cls}")
+            class_name = cls.CLASS_MAP.get(item, f"Lớp {item}")
             
             for j, img_path in enumerate(sample_paths):
                 try:
@@ -135,9 +134,9 @@ class ReadData:
         ])
 
     @classmethod
-    def balance_training_data(cls, train_df: pd.DataFrame, target_col: str, aug_dir: str) -> pd.DataFrame:
+    def balance_training_data(cls, train_df: pd.DataFrame) -> pd.DataFrame:
         print("\nĐang bắt đầu cân bằng dữ liệu tập train...")
-        class_counts = train_df[target_col].value_counts()
+        class_counts = train_df[cls.TARGET_COLUMN].value_counts()
         
         majority_label = class_counts.idxmax()
         minority_label = class_counts.idxmin()
@@ -155,7 +154,7 @@ class ReadData:
         print(f"Lớp thiểu số ({minority_label}): {minority_count} mẫu")
         print(f"-> Cần tạo thêm {n_to_generate} mẫu cho lớp '{minority_label}'")
         
-        minority_paths = train_df[train_df[target_col] == minority_label]['image_path'].tolist()
+        minority_paths = train_df[train_df[cls.TARGET_COLUMN] == minority_label]['image_path'].tolist()
         
         # Lấy pipeline tăng cường
         augmentation_pipeline = cls.get_augmentation_pipeline()
@@ -176,13 +175,13 @@ class ReadData:
             
             original_filename = os.path.basename(original_path)
             new_filename = f"aug_{i}_{original_filename}"
-            new_path = os.path.join(aug_dir, new_filename)
+            new_path = os.path.join(cls.AUG_IMAGES_DIR, new_filename)
             
             cv2.imwrite(new_path, cv2.cvtColor(augmented, cv2.COLOR_RGB2BGR))
             
             new_record = {
                 cls.ID_COLUMN: f"aug_{i}",
-                target_col: minority_label,
+                cls.TARGET_COLUMN: minority_label,
                 'image_path': new_path
             }
             new_records.append(new_record)
@@ -198,7 +197,7 @@ class ReadData:
         return train_df_balanced
 
     @classmethod
-    def show_augmentation_effect(cls, df: pd.DataFrame, augmentation_pipeline: albumentations.Compose, n_examples: int = 5):
+    def show_augmentation_effect(cls, df: pd.DataFrame, n_examples: int = 5):
         if df.empty:
             print("Lỗi: DataFrame rỗng, không thể chọn ảnh.")
             return
@@ -224,6 +223,7 @@ class ReadData:
         plt.title("Ảnh Gốc")
         plt.axis('off')
 
+        augmentation_pipeline = cls.get_augmentation_pipeline()
         for i in range(n_examples):
             augmented = augmentation_pipeline(image=original_img)['image']
             
@@ -237,35 +237,24 @@ class ReadData:
         plt.show()
 
     @classmethod
-    def run(cls):
-        os.makedirs(cls.AUG_IMAGES_DIR, exist_ok=True)
-        print(f"Thư mục ảnh tăng cường: {cls.AUG_IMAGES_DIR}")
+    def run(cls, mode):
+        if mode in ['raw', 'augment']:
+            full_df = cls.load_isic_metadata()
 
-        full_df = cls.load_isic_metadata(csv_path=cls.CSV_PATH, images_dir=cls.IMAGES_DIR, img_id_col=cls.ID_COLUMN)
-        
-        if full_df is not None:
-            train_df, val_df, test_df = cls.split_data(
-                df=full_df,
-                target_col=cls.TARGET_COLUMN,
-                test_size=0.2,
-                val_size=0.1,
-                random_state=42
-            )
+            if full_df is not None:
+                train_df, val_df, test_df = cls.split_data(df=full_df, test_size=0.2, val_size=0.1, random_state=42)
 
-            cls.plot_class_distribution(train_df, cls.TARGET_COLUMN, title="Phân bổ Lớp (Tập Train - TRƯỚC Cân Bằng)")
+                cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
 
-            train_df_balanced = cls.balance_training_data(
-                train_df=train_df,
-                target_col=cls.TARGET_COLUMN,
-                aug_dir=cls.AUG_IMAGES_DIR
-            )
+                if mode == 'augment':
+                    print(f'TĂNG CƯỜNG DỮ LIỆU (lưu tại: {cls.AUG_IMAGES_DIR})')
+                    os.makedirs(cls.AUG_IMAGES_DIR, exist_ok=True)
 
-            cls.plot_class_distribution(train_df_balanced, cls.TARGET_COLUMN, title="Phân bổ Lớp (Tập Train - SAU Cân Bằng)")
+                    train_df_balanced = cls.balance_training_data(train_df=train_df)
 
-            cls.show_sample_images(train_df_balanced, cls.TARGET_COLUMN, cls.CLASS_MAP, n_samples_per_class=4)
-
-            pipeline = cls.get_augmentation_pipeline()
-            cls.show_augmentation_effect(train_df_balanced, pipeline, n_examples=5)
-
-            return True
+                    cls.plot_class_distribution(train_df_balanced, title="Phân bổ Lớp Tập Train - ĐÃ Cân Bằng")
+                    cls.show_sample_images(train_df_balanced, n_samples_per_class=4)
+                    cls.show_augmentation_effect(train_df_balanced, n_examples=5)
+                return True
+        print(f'ReadData with mode = {mode} is not support.')
         return False

@@ -41,8 +41,17 @@ Việc thực thi script được điều phối tập trung thông qua file `ma
 - Class **bắt buộc phải có hàm `run()`** làm điểm vào chính của tác vụ.
 
 #### 3. Cách thực thi script
-Chạy chương trình thông qua `main.py`, truyền tên script cần thực thi vào tham số `--run`:
+Chạy chương trình thông qua `main.py`, truyền tên script cần thực thi và (các) tham số `dưới dạng key=value`:
 
 ```bash
-python main.py --run "<tên_script_1>" "<tên_script_2>" ...
+python main.py --<tên script> <tham số dùng trong script đó>
+```
 
+Ví dụ:
+
+```bash
+python main.py --read_data mode=raw
+python main.py --read_data mode=augment
+python main.py --train_with_method_1 epochs=10 batches=128
+python main.py --train_with_method_2 epochs=10 batches=128
+```
