@@ -13,10 +13,9 @@ def parse_args_list(args_list, allowed=None):
             if key in allowed:
                 parsed[key] = value
             else:
-                print(f"Param {key} is not in allowed list: {allowed}")
+                print(f"Param {key} is not in allowed list ({allowed})")
         else:
             print(f"Invalid argument format '{arg}'. Expected 'key=value'")
-    print(parsed)
     return parsed
 
 
@@ -36,10 +35,10 @@ if __name__ == "__main__":
         mode = params.get('mode')
         ReadData.run(mode=mode)
     elif train_with_method_1_args_list:
-        params = parse_args_list(train_with_method_1_args_list, [])
+        params = parse_args_list(train_with_method_1_args_list, ['epochs', 'batches'])
         print('METHOD 1')
     elif train_with_method_2_args_list:
-        params = parse_args_list(train_with_method_2_args_list, [])
+        params = parse_args_list(train_with_method_2_args_list, ['epochs', 'batches'])
         print('METHOD 2')
     else:
         print('Cannot find any argument. Supported arguments:')
