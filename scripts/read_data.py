@@ -13,8 +13,8 @@ class ReadData:
     CSV_PATH = 'dataset/ISIC_2024_Training_GroundTruth.csv'
     IMAGES_DIR = 'dataset/ISIC_2024_Training_Input'
     AUG_IMAGES_DIR = 'dataset/ISIC_2024_Training_Input_Augmented'
-
     CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
+
     ID_COLUMN = 'isic_id'
     TARGET_COLUMN = 'malignant'
 
@@ -116,7 +116,7 @@ class ReadData:
                     print(f"Lỗi khi đọc ảnh {img_path}: {e}")
                     
         plt.suptitle(f"Ảnh mẫu ({n_samples_per_class} ảnh mỗi lớp)", fontsize=18)
-        plt.tight_layout([0, 0.03, 1, 0.95])
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
 
     @staticmethod
