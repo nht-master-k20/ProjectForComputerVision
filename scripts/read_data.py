@@ -335,7 +335,7 @@ class ReadData:
                 clean_test_csv_path = os.path.join(csv_dir_clean, 'clean_test.csv')
                 final_train_df_clean.to_csv(clean_train_csv_path, index=False)
                 val_df.to_csv(clean_val_csv_path, index=False)
-                test_df.to_csv(clean_train_csv_path, index=False)
+                test_df.to_csv(clean_test_csv_path, index=False)
                 return True
         print(f'ReadData with mode = {mode} is not support.')
         return False
