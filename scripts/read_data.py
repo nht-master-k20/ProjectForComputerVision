@@ -248,7 +248,7 @@ class ReadData:
                 final_train_df = train_df
                 csv_dir = cls.CSV_OUTPUT_DIR
 
-                cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
+                # cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
 
                 if mode == 'augment':
                     print(f'TĂNG CƯỜNG DỮ LIỆU (lưu tại: {cls.AUG_IMAGES_DIR})')
@@ -258,9 +258,9 @@ class ReadData:
                     train_df_balanced = cls.balance_training_data(train_df=train_df)
                     final_train_df = train_df_balanced
 
-                    cls.plot_class_distribution(train_df_balanced, title="Phân bổ Lớp Tập Train - ĐÃ Cân Bằng")
-                    cls.show_sample_images(train_df_balanced, n_samples_per_class=4)
-                    cls.show_augmentation_effect(train_df_balanced, n_examples=5)
+                    # cls.plot_class_distribution(train_df_balanced, title="Phân bổ Lớp Tập Train - ĐÃ Cân Bằng")
+                    # cls.show_sample_images(train_df_balanced, n_samples_per_class=4)
+                    # cls.show_augmentation_effect(train_df_balanced, n_examples=5)
                 os.makedirs(csv_dir, exist_ok=True)
 
                 train_csv_path = os.path.join(csv_dir, f'train_{mode}.csv')
