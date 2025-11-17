@@ -20,7 +20,7 @@ def parse_args_list(args_list, allowed=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Skin Cancer Detection Training Pipeline')
-    parser.add_argument("--read_data", nargs=1, required=False, help='Read data')
+    parser.add_argument("--read_data", nargs="*", required=False, help='Read data')
     parser.add_argument("--train_with_method_1", nargs="*", required=False, help='Train with method 1')
     parser.add_argument("--train_with_method_2", nargs="*", required=False, help='Train with method 2')
     args = parser.parse_args()
@@ -30,9 +30,17 @@ if __name__ == "__main__":
     train_with_method_2_args_list = args.train_with_method_2 or []
 
     if read_data_args_list:
-        params = parse_args_list(read_data_args_list, ['mode'])
+
+        params = parse_args_list(read_data_args_list, allowed=['mode', 'clean'])
+        
         mode = params.get('mode')
-        ReadData.run(mode=mode)
+        clean = params.get('clean')
+        print(f"Debug parsed params: mode={mode}, clean={clean}")
+        is_clean = True if clean == '1' else False
+        
+        ReadData.run(mode=mode, clean=is_clean) 
+        print(f"Calling ReadData with: mode={mode}, clean={is_clean}")
+
     elif train_with_method_1_args_list:
         params = parse_args_list(train_with_method_1_args_list, ['epochs', 'batches'])
         print('METHOD 1')

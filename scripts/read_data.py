@@ -7,6 +7,7 @@ import random
 import cv2
 import albumentations
 from tqdm import tqdm
+import numpy as np
 
 
 class ReadData:
@@ -16,6 +17,10 @@ class ReadData:
     CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
     CSV_OUTPUT_DIR = 'dataset_splits'
     CSV_OUTPUT_DIR_AUG = 'dataset_splits_aug'
+
+    CLEAN_DATA_ROOT = 'dataset/data_clean'
+    CSV_OUTPUT_DIR_CLEAN = 'dataset_splits_clean'
+    CSV_OUTPUT_DIR_AUG_CLEAN = 'dataset_splits_aug_clean'
 
 
     ID_COLUMN = 'isic_id'
@@ -239,7 +244,52 @@ class ReadData:
         plt.show()
 
     @classmethod
-    def run(cls, mode):
+    def remove_hair(cls, image: np.ndarray, kernel_size=(9, 9), threshold_val=10) -> np.ndarray:
+        """Hàm loại bỏ lông trên da"""
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernel_size)
+            blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
+            _, thresh = cv2.threshold(blackhat, threshold_val, 255, cv2.THRESH_BINARY)
+            inpainted_image = cv2.inpaint(image, thresh, 3, cv2.INPAINT_TELEA)
+            return inpainted_image
+        except Exception as e:
+            return image # Trả về ảnh gốc nếu lỗi
+
+    @classmethod
+    def clean_and_save_images(cls, df: pd.DataFrame, split_name: str) -> pd.DataFrame:
+        """
+        1. Đọc ảnh từ đường dẫn cũ.
+        2. Remove hair + Resize (256x256).
+        3. Lưu ảnh mới vào folder processed_data_clean/{split_name}.
+        4. Trả về DataFrame với cột image_path đã cập nhật.
+        """
+        save_dir = os.path.join(cls.CLEAN_DATA_ROOT, split_name)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        print(f"\nĐang xử lý làm sạch tập: {split_name} -> Lưu tại: {save_dir}")
+        
+        new_paths = []
+        for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
+            orig_path = row["image_path"]
+            filename = os.path.basename(orig_path)
+            
+            new_img_path = os.path.join(save_dir, filename)
+            
+            img = cv2.imread(orig_path)
+            if img is not None:
+                clean_img = cls.remove_hair(img, kernel_size=(9, 9), threshold_val=10)     
+                cv2.imwrite(new_img_path, clean_img)
+                new_paths.append(new_img_path)
+            else:
+                new_paths.append(orig_path)
+        
+        df_clean = df.copy()
+        df_clean["image_path"] = new_paths
+        return df_clean
+
+    @classmethod
+    def run(cls, mode, clean=True):
         if mode in ['raw', 'augment']:
             full_df = cls.load_isic_metadata()
 
@@ -247,20 +297,23 @@ class ReadData:
                 train_df, val_df, test_df = cls.split_data(df=full_df, test_size=0.2, val_size=0.1, random_state=42)
                 final_train_df = train_df
                 csv_dir = cls.CSV_OUTPUT_DIR
+                csv_dir_clean = cls.CSV_OUTPUT_DIR_CLEAN
 
-                # cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
+                cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
 
                 if mode == 'augment':
                     print(f'TĂNG CƯỜNG DỮ LIỆU (lưu tại: {cls.AUG_IMAGES_DIR})')
                     os.makedirs(cls.AUG_IMAGES_DIR, exist_ok=True)
 
                     csv_dir = cls.CSV_OUTPUT_DIR_AUG
+                    csv_dir_clean = cls.CSV_OUTPUT_DIR_AUG_CLEAN
                     train_df_balanced = cls.balance_training_data(train_df=train_df)
                     final_train_df = train_df_balanced
 
                     # cls.plot_class_distribution(train_df_balanced, title="Phân bổ Lớp Tập Train - ĐÃ Cân Bằng")
                     # cls.show_sample_images(train_df_balanced, n_samples_per_class=4)
                     # cls.show_augmentation_effect(train_df_balanced, n_examples=5)
+
                 os.makedirs(csv_dir, exist_ok=True)
 
                 train_csv_path = os.path.join(csv_dir, f'train_{mode}.csv')
@@ -270,6 +323,19 @@ class ReadData:
                 final_train_df.to_csv(train_csv_path, index=False)
                 val_df.to_csv(val_csv_path, index=False)
                 test_df.to_csv(test_csv_path, index=False)
+                
+                final_train_df_clean = cls.clean_and_save_images(final_train_df, f'train_{mode}')
+                val_df_clean = cls.clean_and_save_images(val_df, 'val')
+                test_df_clean = cls.clean_and_save_images(test_df, 'test')
+
+                # Clean data
+                os.makedirs(csv_dir_clean, exist_ok=True)
+                clean_train_csv_path = os.path.join(csv_dir_clean, f'clean_train_{mode}.csv')
+                clean_val_csv_path = os.path.join(csv_dir_clean, 'clean_val.csv')
+                clean_test_csv_path = os.path.join(csv_dir_clean, 'clean_test.csv')
+                final_train_df_clean.to_csv(clean_train_csv_path, index=False)
+                val_df.to_csv(clean_val_csv_path, index=False)
+                test_df.to_csv(clean_train_csv_path, index=False)
                 return True
         print(f'ReadData with mode = {mode} is not support.')
         return False
