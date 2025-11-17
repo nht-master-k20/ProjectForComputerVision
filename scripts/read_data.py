@@ -14,6 +14,9 @@ class ReadData:
     IMAGES_DIR = 'dataset/ISIC_2024_Training_Input'
     AUG_IMAGES_DIR = 'dataset/ISIC_2024_Training_Input_Augmented'
     CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
+    CSV_OUTPUT_DIR = 'dataset_splits'
+    CSV_OUTPUT_DIR_AUG = 'dataset_splits_aug'
+
 
     ID_COLUMN = 'isic_id'
     TARGET_COLUMN = 'malignant'
@@ -68,10 +71,8 @@ class ReadData:
         Vẽ biểu đồ cột thể hiện số lượng mẫu của mỗi lớp.
         """
         plt.figure(figsize=(8, 5))
-        # Sử dụng value_counts() để đếm số lượng mỗi lớp
         class_counts = df[cls.TARGET_COLUMN].value_counts()
         
-        # Đặt tên lại cho các nhãn (ví dụ: 0 -> Lành tính, 1 -> Ác tính)
         class_labels = {0: 'Lành tính (0)', 1: 'Ác tính (1)'}
         class_counts.index = class_counts.index.map(class_labels.get)
         
@@ -81,7 +82,6 @@ class ReadData:
         plt.xlabel("Loại tổn thương", fontsize=12)
         plt.ylabel("Số lượng mẫu", fontsize=12)
         
-        # Hiển thị số lượng trên mỗi cột
         for i, count in enumerate(class_counts.values):
             plt.text(i, count + 5, str(count), ha='center', va='bottom', fontsize=11)
             
@@ -128,9 +128,11 @@ class ReadData:
             albumentations.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.7),
             albumentations.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.3),
             albumentations.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.1, rotate_limit=15, p=0.5),
-            albumentations.CoarseDropout(max_holes=8, max_height=img_size//16, max_width=img_size//16,
-                             min_holes=4, min_height=img_size//20, min_width=img_size//20, 
-                             p=0.3)
+            albumentations.CoarseDropout(
+                max_holes=8, max_height=img_size//16, max_width=img_size//16,
+                min_holes=4, min_height=img_size//20, min_width=img_size//20, 
+                p=0.3
+            )
         ])
 
     @classmethod
@@ -243,6 +245,8 @@ class ReadData:
 
             if full_df is not None:
                 train_df, val_df, test_df = cls.split_data(df=full_df, test_size=0.2, val_size=0.1, random_state=42)
+                final_train_df = train_df
+                csv_dir = cls.CSV_OUTPUT_DIR
 
                 cls.plot_class_distribution(train_df, title="Phân bổ Lớp Tập Train - BAN ĐẦU")
 
@@ -250,11 +254,22 @@ class ReadData:
                     print(f'TĂNG CƯỜNG DỮ LIỆU (lưu tại: {cls.AUG_IMAGES_DIR})')
                     os.makedirs(cls.AUG_IMAGES_DIR, exist_ok=True)
 
+                    csv_dir = cls.CSV_OUTPUT_DIR_AUG
                     train_df_balanced = cls.balance_training_data(train_df=train_df)
+                    final_train_df = train_df_balanced
 
                     cls.plot_class_distribution(train_df_balanced, title="Phân bổ Lớp Tập Train - ĐÃ Cân Bằng")
                     cls.show_sample_images(train_df_balanced, n_samples_per_class=4)
                     cls.show_augmentation_effect(train_df_balanced, n_examples=5)
+                os.makedirs(csv_dir, exist_ok=True)
+
+                train_csv_path = os.path.join(csv_dir, f'train_{mode}.csv')
+                val_csv_path = os.path.join(csv_dir, 'val.csv')
+                test_csv_path = os.path.join(csv_dir, 'test.csv')
+
+                final_train_df.to_csv(train_csv_path, index=False)
+                val_df.to_csv(val_csv_path, index=False)
+                test_df.to_csv(test_csv_path, index=False)
                 return True
         print(f'ReadData with mode = {mode} is not support.')
         return False
