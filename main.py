@@ -1,4 +1,6 @@
 import argparse
+
+from models import EfficientNet
 from scripts.read_data import ReadData
 
 
@@ -45,8 +47,14 @@ if __name__ == "__main__":
         params = parse_args_list(train_with_method_1_args_list, ['epochs', 'batches'])
         print('METHOD 1')
     elif train_with_efficientnet_args_list:
-        params = parse_args_list(train_with_efficientnet_args_list, ['epochs', 'batches'])
-        print('EfficientNet Model')
+        params = parse_args_list(train_with_efficientnet_args_list, ['mode', 'image_size', 'batch_size', 'epochs'])
+
+        mode = params.get('mode')
+        image_size = params.get('image_size')
+        batch_size = params.get('batch_size')
+        epochs = params.get('epochs')
+        print(f'EfficientNet Model: mode={mode}, image_size={image_size}, batch_size={batch_size}, epochs={epochs}')
+        EfficientNet.train(mode=mode, image_size=image_size, batch_size=batch_size, epochs=epochs)
     else:
         print('Cannot find any argument. Supported arguments:')
         print('  --read_data')

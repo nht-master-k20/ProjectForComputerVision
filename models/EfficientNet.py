@@ -1,9 +1,10 @@
 from torch.utils.data import DataLoader
-from scripts.get_dataset import get_dataset
 import timm
 import torch.nn as nn
 import torch
 from torch.cuda.amp import GradScaler, autocast
+from scripts.get_dataset import get_dataset
+
 
 def train_one_epoch(model, loader, optimizer, criterion, scaler):
     model.train()
@@ -57,17 +58,17 @@ def train(mode='raw', image_size=384, batch_size=16, epochs=10):
     test_path = ""
 
     if mode == 'raw':
-        train_path =
-        val_path =
-        test_path =
-    elif mode == 'aug':
-        train_path =
-        val_path =
-        test_path =
-    elif mode == 'clean':
-        train_path =
-        val_path =
-        test_path =
+        train_path = 'dataset_splits/train_raw.csv'
+        val_path = 'dataset_splits/val.csv'
+        test_path = 'dataset_splits/test.csv'
+    # elif mode == 'aug':
+    #     train_path =
+    #     val_path =
+    #     test_path =
+    # elif mode == 'clean':
+    #     train_path =
+    #     val_path =
+    #     test_path =
 
     train_dataset, val_dataset, test_dataset = get_dataset(train_path, val_path, test_path, image_size)
 
