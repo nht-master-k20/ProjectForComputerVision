@@ -22,12 +22,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Skin Cancer Detection Training Pipeline')
     parser.add_argument("--read_data", nargs="*", required=False, help='Read data')
     parser.add_argument("--train_with_method_1", nargs="*", required=False, help='Train with method 1')
-    parser.add_argument("--train_with_method_2", nargs="*", required=False, help='Train with method 2')
+    parser.add_argument("--train_with_efficientnet", nargs="*", required=False, help='Train with EfficientNet')
     args = parser.parse_args()
 
     read_data_args_list = args.read_data or []
     train_with_method_1_args_list = args.train_with_method_1 or []
-    train_with_method_2_args_list = args.train_with_method_2 or []
+    train_with_efficientnet_args_list = args.train_with_efficientnet or []
 
     if read_data_args_list:
 
@@ -44,11 +44,11 @@ if __name__ == "__main__":
     elif train_with_method_1_args_list:
         params = parse_args_list(train_with_method_1_args_list, ['epochs', 'batches'])
         print('METHOD 1')
-    elif train_with_method_2_args_list:
-        params = parse_args_list(train_with_method_2_args_list, ['epochs', 'batches'])
-        print('METHOD 2')
+    elif train_with_efficientnet_args_list:
+        params = parse_args_list(train_with_efficientnet_args_list, ['epochs', 'batches'])
+        print('EfficientNet Model')
     else:
         print('Cannot find any argument. Supported arguments:')
         print('  --read_data')
         print('  --train_with_method_1')
-        print('  --train_with_method_2')
+        print('  --train_with_efficientnet')
