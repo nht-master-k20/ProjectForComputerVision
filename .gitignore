@@ -1,6 +1,6 @@
-dataset/ISIC_2024_Training_Input/
-dataset/ISIC_2024_Training_Input_Augmented/
-dataset/data_clean/
-dataset/ISIC_2024_Training_Input.zip
+dataset/
+dataset.zip
 scripts/__pycache__/
 cv/
+.idea/
+.venv/
