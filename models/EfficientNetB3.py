@@ -258,29 +258,12 @@ def maybe_init_ddp(ddp, local_rank):
     return None
 
 
-def train(mode='raw', image_size=300, batch_size=32, epochs=10, ddp=False, local_rank=None):
-    """
-    Main train function compatible with main.py calling signature.
-    - ddp: bool -> whether to initialize distributed training (torchrun)
-    - local_rank: int -> local GPU id for this process (set by torchrun)
-    """
+def train(mode='raw', image_size=300, batch_size=32, epochs=10):
     torch.cuda.empty_cache()
 
-    # Initialize DDP if requested
-    if ddp:
-        local_rank = maybe_init_ddp(ddp, local_rank)
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-    else:
-        local_rank = None
-        world_size = 1
-        rank = 0
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() and local_rank is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
-
-    run_name = f"EfficientNetB3_{mode}_imgsize{image_size}_bs{batch_size}_ep{epochs}_macro"
-
-    # paths based on mode
+    # paths
     if mode == 'raw':
         train_path = 'dataset_splits/train_raw.csv'
         val_path = 'dataset_splits/val.csv'
@@ -294,244 +277,91 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, ddp=False, local
         val_path = 'dataset_splits_aug_clean/clean_val.csv'
         test_path = 'dataset_splits_aug_clean/clean_test.csv'
     else:
-        raise ValueError("Unknown mode: " + str(mode))
+        raise ValueError(f"Unknown mode: {mode}")
 
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
 
-    if is_main_process():
-        print(f"Dataset sizes:")
-        print(f"  Train: {len(train_df)}")
-        print(f"  Val  : {len(val_df)}")
-        print(f"  Test : {len(test_df)}")
+    # datasets
+    train_loader = DataLoader(ISICDataset(train_df, img_size=image_size),
+                              batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(ISICDataset(val_df, img_size=image_size),
+                            batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    test_loader = DataLoader(ISICDataset(test_df, img_size=image_size),
+                             batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
-    # class distribution print only on main process
-    if is_main_process():
-        print(f"\nClass distribution:")
-        train_benign = (train_df['malignant'] == 0).sum()
-        train_malignant = (train_df['malignant'] == 1).sum()
-        val_benign = (val_df['malignant'] == 0).sum()
-        val_malignant = (val_df['malignant'] == 1).sum()
-        test_benign = (test_df['malignant'] == 0).sum()
-        test_malignant = (test_df['malignant'] == 1).sum()
-
-        print(f"  Train - Benign: {train_benign} ({train_benign / len(train_df) * 100:.1f}%), "
-              f"Malignant: {train_malignant} ({train_malignant / len(train_df) * 100:.1f}%)")
-        print(f"  Val   - Benign: {val_benign} ({val_benign / len(val_df) * 100:.1f}%), "
-              f"Malignant: {val_malignant} ({val_malignant / len(val_df) * 100:.1f}%)")
-        print(f"  Test  - Benign: {test_benign} ({test_benign / len(test_df) * 100:.1f}%), "
-              f"Malignant: {test_malignant} ({test_malignant / len(test_df) * 100:.1f}%)")
-
-    # datasets + samplers
-    train_dataset = ISICDataset(train_df, img_size=image_size)
-    val_dataset = ISICDataset(val_df, img_size=image_size)
-    test_dataset = ISICDataset(test_df, img_size=image_size)
-
-    if ddp:
-        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
-        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-        test_sampler = DistributedSampler(test_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler,
-                                  num_workers=8, pin_memory=True, prefetch_factor=2)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler,
-                                num_workers=8, pin_memory=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, sampler=test_sampler,
-                                 num_workers=8, pin_memory=True)
-    else:
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                                  num_workers=8, pin_memory=True, prefetch_factor=2)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                                num_workers=8, pin_memory=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
-                                 num_workers=8, pin_memory=True)
-
-    # model, optimizer, criterion, scaler
+    # model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
     model = model.to(device)
 
-    if ddp:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
-
+    # optimizer, criterion, scheduler
     lr = 1e-3
     weight_decay = 0.01
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-    class_weights = compute_class_weight(
-        'balanced',
-        classes=np.array([0, 1]),
-        y=train_df['malignant'].values
-    )
+    class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=train_df['malignant'].values)
     class_weights = torch.FloatTensor(class_weights).to(device)
-
-    if is_main_process():
-        print(f"\nClass weights: Benign={class_weights[0]:.4f}, Malignant={class_weights[1]:.4f}")
-
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    scaler = GradScaler()  # no device arg
-
+    scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    best_f1 = -1
-    patience_counter = 0
-    early_stop_patience = 5
-    gradient_clip = 1.0
-
+    # MLflow run
     if is_main_process():
-        print(f"\nStarting training:")
-        print(f"  Image size : {image_size}")
-        print(f"  Batch size : {batch_size}")
-        print(f"  Max epochs : {epochs}")
-        print(f"  Learning rate : {lr}")
-        print(f"  Gradient clip : {gradient_clip}")
-        print(f"  Metrics avg : macro")
-        print(f"  Device     : {device}\n")
-
-    # MLflow run only started on main process to avoid duplicate runs
-    if is_main_process():
+        run_name = f"EfficientNetB3_{mode}_{image_size}_bs{batch_size}_ep{epochs}"
         mlflow_run = start_mlflow_run(run_name, mode, image_size)
-        log_training_params(
-            mode=mode,
-            image_size=image_size,
-            batch_size=batch_size,
-            epochs=epochs,
-            early_stop_patience=early_stop_patience,
-            train_size=len(train_df),
-            val_size=len(val_df),
-            test_size=len(test_df),
-            device=device,
-            lr=lr,
-            weight_decay=weight_decay,
-            class_weights=class_weights,
-            lr_strategy="uniform",
-            gradient_clip=gradient_clip
-        )
+        log_training_params(mode, image_size, batch_size, epochs,
+                            early_stop_patience=5,
+                            train_size=len(train_df),
+                            val_size=len(val_df),
+                            test_size=len(test_df),
+                            device=device,
+                            lr=lr,
+                            weight_decay=weight_decay,
+                            class_weights=class_weights)
     else:
         mlflow_run = None
 
-    checkpoint_dir = "checkpoints"
-    if is_main_process():
-        os.makedirs(checkpoint_dir, exist_ok=True)
-    # barrier so that dir exists before other ranks try to save (if they ever do)
-    if ddp and dist.is_initialized():
-        dist.barrier()
+    # training loop
+    best_f1 = -1
+    patience_counter = 0
+    gradient_clip = 1.0
 
-    model_path = os.path.join(checkpoint_dir, f"best_efficientnet_b3_{mode}_{image_size}.pth")
+    model_path = f"checkpoints/best_efficientnet_b3_{mode}_{image_size}.pth"
+    os.makedirs("checkpoints", exist_ok=True)
 
     for epoch in range(epochs):
-        if ddp:
-            train_sampler.set_epoch(epoch)
-
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip, ddp=ddp)
-
-        val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion, show_report=False, ddp=ddp)
+        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip)
+        val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion, show_report=False)
 
         scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
 
-        # Log metrics only from main process
         if is_main_process():
-            log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_recall, val_precision, val_f1, current_lr)
+            log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr)
+            print(f"Epoch {epoch + 1}/{epochs} | Train Loss {train_loss:.4f} | Val F1 {val_f1:.4f}")
 
-        if is_main_process():
-            print(f"\nEpoch {epoch + 1}/{epochs} | LR: {current_lr:.2e}")
-            print(f"  Train Loss: {train_loss:.4f}")
-            print(f"  Val Loss  : {val_loss:.4f}")
-            print(f"  Accuracy  : {val_acc * 100:.2f}%")
-            print(f"  Precision : {val_precision * 100:.2f}%")
-            print(f"  Recall    : {val_recall * 100:.2f}%")
-            print(f"  F1 Score  : {val_f1 * 100:.2f}%")
-
-        # Save best model only on main process
-        if is_main_process():
             if val_f1 > best_f1:
                 best_f1 = val_f1
                 patience_counter = 0
-                # save full checkpoint
-                torch.save({
-                    'epoch': epoch + 1,
-                    # if DDP, save model.module.state_dict()
-                    'model_state_dict': (model.module.state_dict() if isinstance(model, DDP) else model.state_dict()),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'best_f1': best_f1,
-                    'metrics': {
-                        'accuracy': val_acc,
-                        'precision': val_precision,
-                        'recall': val_recall,
-                        'f1': val_f1,
-                        'loss': val_loss
-                    }
-                }, model_path)
+                torch.save({'epoch': epoch + 1,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'best_f1': best_f1}, model_path)
                 log_model_artifact(model_path)
-                print(f"Saved best model! (F1: {val_f1 * 100:.2f}%)")
             else:
                 patience_counter += 1
-                print(f"  No improvement ({patience_counter}/{early_stop_patience})")
 
-            if patience_counter >= early_stop_patience:
-                print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            if patience_counter >= 5:
+                print("Early stopping")
                 mlflow.log_param("actual_epochs", epoch + 1)
                 break
 
+    # final test
     if is_main_process():
-        print(f"\n{'=' * 60}")
-        print(f"Training completed! Best F1: {best_f1 * 100:.2f}%")
-        print(f"{'=' * 60}")
-
-    # Evaluate on test set
-    if is_main_process():
-        print("\nEvaluating on test set...")
-
-    # load best checkpoint on main process
-    if is_main_process() and os.path.exists(model_path):
+        print("Evaluating on test set...")
         checkpoint = torch.load(model_path, map_location=device)
-        # load into underlying model (if ddp we load into model.module)
-        target = model.module if isinstance(model, DDP) else model
-        target.load_state_dict(checkpoint['model_state_dict'])
-        loaded_f1 = checkpoint.get('best_f1', None)
-        print(f"Loaded best model from epoch {checkpoint.get('epoch', '?')} (F1: {loaded_f1 * 100 if loaded_f1 else 'N/A'}%)")
-    elif is_main_process():
-        print(f"Warning: {model_path} not found. Using current model state.")
-
-    # For evaluation, broadcast weights from main process to others if DDP active so each rank has same weights
-    if ddp and dist.is_initialized():
-        # let main process have the most up-to-date weights; broadcast them to others
-        # save temp state dict on rank0 and broadcast tensors
-        if is_main_process():
-            state_dict = (model.module.state_dict() if isinstance(model, DDP) else model.state_dict())
-        else:
-            state_dict = None
-        # broadcast using torch.distributed.broadcast_object_list if available
-        try:
-            all_state = [state_dict]
-            dist.broadcast_object_list(all_state, src=0)
-            state_dict = all_state[0]
-            target = model.module if isinstance(model, DDP) else model
-            target.load_state_dict(state_dict)
-        except Exception:
-            pass  # best-effort
-
-    test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion, show_report=True, ddp=ddp)
-
-    # Only main process logs test metrics and register model
-    if is_main_process():
+        model.load_state_dict(checkpoint['model_state_dict'])
+        test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion,
+                                                                             show_report=True)
         log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
-        # Register model using underlying module if DDP
-        model_for_registry = model.module if isinstance(model, DDP) else model
-        log_model_registry(model_for_registry, mode)
-
-    # cleanup ddp
-    if ddp and dist.is_initialized():
-        dist.barrier()
-        dist.destroy_process_group()
-
-    return {
-        'best_val_f1': best_f1,
-        'test_metrics': {
-            'accuracy': test_acc,
-            'precision': test_precision,
-            'recall': test_recall,
-            'f1': test_f1,
-            'loss': test_loss
-        }
-    }
+        log_model_registry(model, mode)
