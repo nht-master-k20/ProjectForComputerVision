@@ -154,10 +154,10 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         train_path = 'dataset_splits/train_raw.csv'
         val_path = 'dataset_splits/val.csv'
         test_path = 'dataset_splits/test.csv'
-    # elif mode == 'aug':
-    #     train_path =
-    #     val_path =
-    #     test_path =
+    elif mode == 'aug':
+        train_path = 'dataset_splits_aug/train_augment.csv'
+        val_path = 'dataset_splits_aug/val.csv'
+        test_path = 'dataset_splits_aug/test.csv'
     # elif mode == 'clean':
     #     train_path =
     #     val_path =
