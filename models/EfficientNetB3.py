@@ -9,6 +9,7 @@ from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_sc
 import os
 import mlflow
 import mlflow.pytorch
+import numpy as np
 
 
 os.environ["DATABRICKS_HOST"] = "https://dbc-5d852ff6-7674.cloud.databricks.com"
@@ -186,10 +187,14 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
     model = model.to(device)
 
+    labels = train_df['malignant'].values
+    classes, counts = np.unique(labels, return_counts=True)
+    weights = torch.tensor([1.0 / c for c in counts], dtype=torch.float32).to(device)
+
     lr = 1e-3
     weight_decay = 0.01
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=weights)
     scaler = GradScaler('cuda')
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
