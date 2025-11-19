@@ -283,7 +283,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     class_weights = compute_class_weight(
         'balanced',
         classes=np.array([0, 1]),
-        y=train_df['target'].values
+        y=train_df['malignant'].values
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
 
