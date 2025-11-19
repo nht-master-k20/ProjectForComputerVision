@@ -263,7 +263,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
                 # Log model artifact to MLflow
                 log_model_artifact(model_path)
 
-                print(f"✓ Saved best model! (F1: {val_f1 * 100:.2f}%)")
+                print(f"Saved best model! (F1: {val_f1 * 100:.2f}%)")
             else:
                 patience_counter += 1
                 print(f"  No improvement ({patience_counter}/{early_stop_patience})")
