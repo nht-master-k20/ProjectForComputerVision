@@ -5,11 +5,12 @@ import torch
 from torch.amp import GradScaler, autocast
 import pandas as pd
 from scripts.ISICDataset import ISICDataset
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, classification_report
+from sklearn.utils.class_weight import compute_class_weight
+import numpy as np
 import os
 import mlflow
 import mlflow.pytorch
-
 
 os.environ["DATABRICKS_HOST"] = "https://dbc-5d852ff6-7674.cloud.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "dapid40cb896d1a4c41fa62835b61811d2e1"
@@ -24,9 +25,10 @@ def start_mlflow_run(run_name, mode, image_size):
 
 
 def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
-                        train_size, val_size, test_size, device, lr=1e-3, weight_decay=0.01):
+                        train_size, val_size, test_size, device, lr=1e-4, weight_decay=0.01,
+                        class_weights=None):
     """Log all training parameters to MLflow"""
-    mlflow.log_params({
+    params = {
         "model": "tf_efficientnet_b3.ns_jft_in1k",
         "mode": mode,
         "image_size": image_size,
@@ -46,7 +48,15 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         "num_workers": 8,
         "pin_memory": True,
         "mixed_precision": True,
-    })
+        "metrics_average": "macro",
+        "use_class_weights": class_weights is not None,
+    }
+
+    if class_weights is not None:
+        params["class_weight_benign"] = float(class_weights[0])
+        params["class_weight_malignant"] = float(class_weights[1])
+
+    mlflow.log_params(params)
 
 
 def log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr):
@@ -111,7 +121,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
     return total_loss / len(loader)
 
 
-def validate(model, loader, criterion):
+def validate(model, loader, criterion, show_report=False):
     model.eval()
     total_loss = 0
     all_preds = []
@@ -131,19 +141,27 @@ def validate(model, loader, criterion):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    # Calculate all metrics
+    # Calculate metrics with macro average for balanced evaluation
     accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='weighted')
-    recall = recall_score(all_labels, all_preds, average='weighted')
-    f1 = f1_score(all_labels, all_preds, average='weighted')
+    macro_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    macro_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
     avg_loss = total_loss / len(loader)
 
-    return avg_loss, accuracy, precision, recall, f1
+    if show_report:
+        print("\n" + "=" * 60)
+        print("Per-class Metrics:")
+        print("=" * 60)
+        print(classification_report(all_labels, all_preds,
+                                    target_names=['Benign (0)', 'Malignant (1)'],
+                                    digits=4, zero_division=0))
+
+    return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
 
 def train(mode='raw', image_size=300, batch_size=128, epochs=30):
-    run_name = f"EfficientNetB3_imgsize{image_size}_bs{batch_size}_ep{epochs}"
+    run_name = f"EfficientNetB3_imgsize{image_size}_bs{batch_size}_ep{epochs}_macro"
 
     train_path = ""
     val_path = ""
@@ -171,6 +189,22 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     print(f"  Val  : {len(val_df)}")
     print(f"  Test : {len(test_df)}")
 
+    # Check class distribution
+    print(f"\nClass distribution:")
+    train_benign = (train_df['target'] == 0).sum()
+    train_malignant = (train_df['target'] == 1).sum()
+    val_benign = (val_df['target'] == 0).sum()
+    val_malignant = (val_df['target'] == 1).sum()
+    test_benign = (test_df['target'] == 0).sum()
+    test_malignant = (test_df['target'] == 1).sum()
+
+    print(f"  Train - Benign: {train_benign} ({train_benign / len(train_df) * 100:.1f}%), "
+          f"Malignant: {train_malignant} ({train_malignant / len(train_df) * 100:.1f}%)")
+    print(f"  Val   - Benign: {val_benign} ({val_benign / len(val_df) * 100:.1f}%), "
+          f"Malignant: {val_malignant} ({val_malignant / len(val_df) * 100:.1f}%)")
+    print(f"  Test  - Benign: {test_benign} ({test_benign / len(test_df) * 100:.1f}%), "
+          f"Malignant: {test_malignant} ({test_malignant / len(test_df) * 100:.1f}%)")
+
     train_dataset = ISICDataset(train_df, img_size=image_size)
     val_dataset = ISICDataset(val_df, img_size=image_size)
     test_dataset = ISICDataset(test_df, img_size=image_size)
@@ -186,10 +220,20 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
     model = model.to(device)
 
-    lr = 1e-3
+    lr = 1e-4
     weight_decay = 0.01
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss()
+
+    class_weights = compute_class_weight(
+        'balanced',
+        classes=np.array([0, 1]),
+        y=train_df['target'].values
+    )
+    class_weights = torch.FloatTensor(class_weights).to(device)
+
+    print(f"\nClass weights: Benign={class_weights[0]:.4f}, Malignant={class_weights[1]:.4f}")
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     scaler = GradScaler('cuda')
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
@@ -202,6 +246,8 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     print(f"  Image size : {image_size}")
     print(f"  Batch size : {batch_size}")
     print(f"  Max epochs : {epochs}")
+    print(f"  Learning rate : {lr}")
+    print(f"  Metrics avg : macro")
     print(f"  Device     : {device}\n")
 
     # Start MLflow run
@@ -219,7 +265,8 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
             test_size=len(test_df),
             device=device,
             lr=lr,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
+            class_weights=class_weights
         )
 
         checkpoint_dir = "checkpoints"
@@ -230,7 +277,9 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
 
         for epoch in range(epochs):
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
-            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion)
+            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
+                model, val_loader, criterion, show_report=(epoch == 0)
+            )
 
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
@@ -267,14 +316,14 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
                 # Log model artifact to MLflow
                 log_model_artifact(model_path)
 
-                print(f"Saved best model! (F1: {val_f1 * 100:.2f}%)")
+                print(f"  Saved best model! (F1: {val_f1 * 100:.2f}%)")
             else:
                 patience_counter += 1
                 print(f"  No improvement ({patience_counter}/{early_stop_patience})")
 
             # Early stopping
             if patience_counter >= early_stop_patience:
-                print(f"\n⚠ Early stopping triggered after {epoch + 1} epochs")
+                print(f"\nEarly stopping triggered after {epoch + 1} epochs")
                 mlflow.log_param("actual_epochs", epoch + 1)
                 break
 
@@ -282,18 +331,20 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         print(f"Training completed! Best F1: {best_f1 * 100:.2f}%")
         print(f"{'=' * 60}")
 
-        # ✅ Test on test set với error handling
+        # Test on test set
         print("\nEvaluating on test set...")
 
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             model.load_state_dict(checkpoint['model_state_dict'])
             loaded_f1 = checkpoint['best_f1']
-            print(f"✓ Loaded best model from epoch {checkpoint['epoch']} (F1: {loaded_f1 * 100:.2f}%)")
+            print(f"Loaded best model from epoch {checkpoint['epoch']} (F1: {loaded_f1 * 100:.2f}%)")
         else:
-            print(f"⚠ Warning: {model_path} not found. Using current model state.")
+            print(f"Warning: {model_path} not found. Using current model state.")
 
-        test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion)
+        test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
+            model, test_loader, criterion, show_report=True
+        )
 
         # Log test metrics
         log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
