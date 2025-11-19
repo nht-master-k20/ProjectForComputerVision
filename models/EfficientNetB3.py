@@ -1,3 +1,4 @@
+from mlflow.models import infer_signature
 from torch.utils.data import DataLoader
 import timm
 import torch.nn as nn
@@ -92,13 +93,34 @@ def log_model_artifact(model_path):
     mlflow.log_artifact(model_path)
 
 
-def log_model_registry(model, mode):
-    """Log model to MLflow Model Registry"""
-    mlflow.pytorch.log_model(
-        model,
-        "model",
-        registered_model_name=f"main.default.EfficientNetB3_SkinCancer_{mode}"
+def log_model_registry(model, mode, run_name="CreateModelVersion"):
+    registered_model_name = f"efficientnetb3_skincancer_{mode}.default.EfficientNetB3"
+
+    # Đặt model về CPU để log ổn định
+    model_cpu = model.to("cpu").eval()
+
+    # Tạo input_example đúng định dạng EfficientNetB3
+    # (3, 300, 300) hoặc size bạn đang dùng
+    dummy_input = torch.randn(1, 3, 300, 300)
+
+    with torch.no_grad():
+        dummy_output = model_cpu(dummy_input)
+
+    signature = infer_signature(
+        model_input=dummy_input.numpy(),
+        model_output=dummy_output.numpy()
     )
+
+    with mlflow.start_run(run_name=run_name):
+        mlflow.pytorch.log_model(
+            pytorch_model=model_cpu,
+            name="model",
+            registered_model_name=registered_model_name,
+            input_example=dummy_input.numpy(),
+            signature=signature
+        )
+
+    print(f"Model logged + Registered vào Unity Catalog: {registered_model_name}")
 
 
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
