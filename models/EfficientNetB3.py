@@ -93,7 +93,8 @@ def log_model_artifact(model_path):
     mlflow.log_artifact(model_path)
 
 
-def log_model_registry(model, mode, run_name="CreateModelVersion"):
+def log_model_registry(model, mode):
+    run_name = f"efficientnetb3_skincancer_{mode}_run"
     registered_model_name = f"efficientnetb3_skincancer_{mode}.default.EfficientNetB3"
 
     # Đặt model về CPU để log ổn định
