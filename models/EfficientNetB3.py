@@ -242,12 +242,12 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
 
     # Kiểm tra phân bố class để xác định mức độ imbalance
     print(f"\nClass distribution:")
-    train_benign = (train_df['target'] == 0).sum()
-    train_malignant = (train_df['target'] == 1).sum()
-    val_benign = (val_df['target'] == 0).sum()
-    val_malignant = (val_df['target'] == 1).sum()
-    test_benign = (test_df['target'] == 0).sum()
-    test_malignant = (test_df['target'] == 1).sum()
+    train_benign = (train_df['malignant'] == 0).sum()
+    train_malignant = (train_df['malignant'] == 1).sum()
+    val_benign = (val_df['malignant'] == 0).sum()
+    val_malignant = (val_df['malignant'] == 1).sum()
+    test_benign = (test_df['malignant'] == 0).sum()
+    test_malignant = (test_df['malignant'] == 1).sum()
 
     print(f"  Train - Benign: {train_benign} ({train_benign / len(train_df) * 100:.1f}%), "
           f"Malignant: {train_malignant} ({train_malignant / len(train_df) * 100:.1f}%)")
