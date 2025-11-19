@@ -1,5 +1,4 @@
 import argparse
-
 from models import EfficientNetB3
 from scripts.read_data import ReadData
 
