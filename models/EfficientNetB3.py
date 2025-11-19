@@ -12,6 +12,7 @@ import os
 import mlflow
 import mlflow.pytorch
 
+# Cấu hình MLflow để kết nối với Databricks
 os.environ["DATABRICKS_HOST"] = "https://dbc-5d852ff6-7674.cloud.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "dapid40cb896d1a4c41fa62835b61811d2e1"
 mlflow.set_tracking_uri("databricks")
@@ -19,15 +20,15 @@ mlflow.set_experiment("/Workspace/Users/nguyenduonghai07@gmail.com/SkinDiseaseCl
 
 
 def start_mlflow_run(run_name, mode, image_size):
-    """Start MLflow run with a specific name"""
+    """Khởi tạo MLflow run với tên cụ thể"""
     run_name = run_name or f"EfficientNetB3_{mode}_{image_size}"
     return mlflow.start_run(run_name=run_name)
 
 
 def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
                         train_size, val_size, test_size, device, lr=1e-4, weight_decay=0.01,
-                        class_weights=None):
-    """Log all training parameters to MLflow"""
+                        class_weights=None, lr_strategy="uniform", gradient_clip=1.0):
+    """Log tất cả các tham số training vào MLflow"""
     params = {
         "model": "tf_efficientnet_b3.ns_jft_in1k",
         "mode": mode,
@@ -36,7 +37,9 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         "max_epochs": epochs,
         "optimizer": "AdamW",
         "learning_rate": lr,
+        "lr_strategy": lr_strategy,
         "weight_decay": weight_decay,
+        "gradient_clip_max_norm": gradient_clip,
         "scheduler": "CosineAnnealingLR",
         "scheduler_T_max": epochs,
         "scheduler_eta_min": 1e-6,
@@ -60,7 +63,7 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
 
 
 def log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr):
-    """Log metrics for each epoch"""
+    """Log metrics cho mỗi epoch"""
     mlflow.log_metrics({
         "train_loss": train_loss,
         "val_loss": val_loss,
@@ -73,7 +76,7 @@ def log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_r
 
 
 def log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_val_f1):
-    """Log final test metrics"""
+    """Log metrics cuối cùng trên test set"""
     mlflow.log_metrics({
         "test_loss": test_loss,
         "test_accuracy": test_acc,
@@ -85,12 +88,12 @@ def log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, 
 
 
 def log_model_artifact(model_path):
-    """Log model checkpoint as artifact"""
+    """Log model checkpoint như artifact"""
     mlflow.log_artifact(model_path)
 
 
 def log_model_registry(model, mode):
-    """Log model to MLflow Model Registry"""
+    """Đăng ký model vào MLflow Model Registry"""
     mlflow.pytorch.log_model(
         model,
         "model",
@@ -98,7 +101,21 @@ def log_model_registry(model, mode):
     )
 
 
-def train_one_epoch(model, loader, optimizer, criterion, scaler):
+def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
+    """
+    Train model trong 1 epoch
+
+    Args:
+        model: Model cần train
+        loader: DataLoader cho training data
+        optimizer: Optimizer (AdamW)
+        criterion: Loss function (CrossEntropyLoss với class weights)
+        scaler: GradScaler cho mixed precision training
+        gradient_clip: Giá trị max norm cho gradient clipping
+
+    Returns:
+        Average training loss của epoch
+    """
     model.train()
     total_loss = 0
 
@@ -108,11 +125,17 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
 
         optimizer.zero_grad()
 
+        # Mixed precision training để tối ưu memory và tốc độ
         with autocast('cuda'):
             outputs = model(imgs)
             loss = criterion(outputs, labels)
 
         scaler.scale(loss).backward()
+
+        # Gradient clipping để tăng tính ổn định khi training
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
+
         scaler.step(optimizer)
         scaler.update()
 
@@ -122,6 +145,18 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
 
 
 def validate(model, loader, criterion, show_report=False):
+    """
+    Đánh giá model trên validation/test set
+
+    Args:
+        model: Model cần đánh giá
+        loader: DataLoader cho validation/test data
+        criterion: Loss function
+        show_report: Có hiển thị classification report chi tiết hay không
+
+    Returns:
+        avg_loss, accuracy, macro_precision, macro_recall, macro_f1
+    """
     model.eval()
     total_loss = 0
     all_preds = []
@@ -141,7 +176,8 @@ def validate(model, loader, criterion, show_report=False):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    # Calculate metrics with macro average for balanced evaluation
+    # Tính metrics với macro average để cân bằng giữa các class
+    # Quan trọng với imbalanced dataset
     accuracy = accuracy_score(all_labels, all_preds)
     macro_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
     macro_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
@@ -149,6 +185,7 @@ def validate(model, loader, criterion, show_report=False):
 
     avg_loss = total_loss / len(loader)
 
+    # Hiển thị metrics chi tiết cho từng class (Benign vs Malignant)
     if show_report:
         print("\n" + "=" * 60)
         print("Per-class Metrics:")
@@ -161,8 +198,21 @@ def validate(model, loader, criterion, show_report=False):
 
 
 def train(mode='raw', image_size=300, batch_size=128, epochs=30):
+    """
+    Hàm chính để train EfficientNet B3 model cho bài toán phân loại ung thư da
+
+    Args:
+        mode: Loại dataset ('raw', 'aug', 'clean')
+        image_size: Kích thước ảnh input
+        batch_size: Số lượng samples trong 1 batch
+        epochs: Số epoch tối đa
+
+    Returns:
+        Dictionary chứa best validation F1 và test metrics
+    """
     run_name = f"EfficientNetB3_imgsize{image_size}_bs{batch_size}_ep{epochs}_macro"
 
+    # Đường dẫn đến các file CSV chứa dataset splits
     train_path = ""
     val_path = ""
     test_path = ""
@@ -180,6 +230,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     #     val_path =
     #     test_path =
 
+    # Load dataframes
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
@@ -189,7 +240,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     print(f"  Val  : {len(val_df)}")
     print(f"  Test : {len(test_df)}")
 
-    # Check class distribution
+    # Kiểm tra phân bố class để xác định mức độ imbalance
     print(f"\nClass distribution:")
     train_benign = (train_df['target'] == 0).sum()
     train_malignant = (train_df['target'] == 1).sum()
@@ -205,6 +256,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     print(f"  Test  - Benign: {test_benign} ({test_benign / len(test_df) * 100:.1f}%), "
           f"Malignant: {test_malignant} ({test_malignant / len(test_df) * 100:.1f}%)")
 
+    # Tạo datasets và dataloaders
     train_dataset = ISICDataset(train_df, img_size=image_size)
     val_dataset = ISICDataset(val_df, img_size=image_size)
     test_dataset = ISICDataset(test_df, img_size=image_size)
@@ -216,14 +268,18 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
+    # Setup model, optimizer, và các components khác
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
     model = model.to(device)
 
+    # Learning rate thấp hơn cho fine-tuning pretrained model
     lr = 1e-4
     weight_decay = 0.01
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
+    # Tính class weights để xử lý imbalanced dataset
+    # Class có ít samples sẽ có weight cao hơn
     class_weights = compute_class_weight(
         'balanced',
         classes=np.array([0, 1]),
@@ -233,27 +289,32 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
 
     print(f"\nClass weights: Benign={class_weights[0]:.4f}, Malignant={class_weights[1]:.4f}")
 
+    # Loss function với class weights
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     scaler = GradScaler('cuda')
 
+    # Cosine Annealing scheduler để giảm learning rate dần
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    best_f1 = -1
+    # Early stopping parameters
+    best_f1 = -1  # Khởi tạo -1 để epoch đầu tiên luôn save model
     patience_counter = 0
     early_stop_patience = 5
+    gradient_clip = 1.0
 
     print(f"\nStarting training:")
     print(f"  Image size : {image_size}")
     print(f"  Batch size : {batch_size}")
     print(f"  Max epochs : {epochs}")
     print(f"  Learning rate : {lr}")
+    print(f"  Gradient clip : {gradient_clip}")
     print(f"  Metrics avg : macro")
     print(f"  Device     : {device}\n")
 
-    # Start MLflow run
+    # Bắt đầu MLflow run để track experiment
     with start_mlflow_run(run_name, mode, image_size):
 
-        # Log all parameters
+        # Log tất cả hyperparameters
         log_training_params(
             mode=mode,
             image_size=image_size,
@@ -266,27 +327,36 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
             device=device,
             lr=lr,
             weight_decay=weight_decay,
-            class_weights=class_weights
+            class_weights=class_weights,
+            lr_strategy="uniform",
+            gradient_clip=gradient_clip
         )
 
+        # Tạo thư mục lưu checkpoints
         checkpoint_dir = "checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         model_path = os.path.join(checkpoint_dir, f"best_efficientnet_b3_{mode}_{image_size}.pth")
 
         print(f"Model checkpoint will be saved to: {model_path}\n")
 
+        # Training loop
         for epoch in range(epochs):
-            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
+            # Train 1 epoch
+            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip)
+
+            # Validate trên validation set
             val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
-                model, val_loader, criterion, show_report=(epoch == 0)
+                model, val_loader, criterion, show_report=False
             )
 
+            # Cập nhật learning rate theo scheduler
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
 
-            # Log metrics to MLflow
+            # Log metrics vào MLflow
             log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr)
 
+            # In kết quả của epoch
             print(f"\nEpoch {epoch + 1}/{epochs} | LR: {current_lr:.2e}")
             print(f"  Train Loss: {train_loss:.4f}")
             print(f"  Val Loss  : {val_loss:.4f}")
@@ -295,10 +365,12 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
             print(f"  Recall    : {val_recall * 100:.2f}%")
             print(f"  F1 Score  : {val_f1 * 100:.2f}%")
 
+            # Save best model dựa trên macro F1 score
             if val_f1 > best_f1:
                 best_f1 = val_f1
                 patience_counter = 0
 
+                # Lưu model state, optimizer state, và metrics
                 torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': model.state_dict(),
@@ -313,15 +385,15 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
                     }
                 }, model_path)
 
-                # Log model artifact to MLflow
+                # Log model artifact vào MLflow
                 log_model_artifact(model_path)
 
-                print(f"  Saved best model! (F1: {val_f1 * 100:.2f}%)")
+                print(f"Saved best model! (F1: {val_f1 * 100:.2f}%)")
             else:
                 patience_counter += 1
                 print(f"  No improvement ({patience_counter}/{early_stop_patience})")
 
-            # Early stopping
+            # Early stopping nếu không có cải thiện sau patience epochs
             if patience_counter >= early_stop_patience:
                 print(f"\nEarly stopping triggered after {epoch + 1} epochs")
                 mlflow.log_param("actual_epochs", epoch + 1)
@@ -331,9 +403,10 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         print(f"Training completed! Best F1: {best_f1 * 100:.2f}%")
         print(f"{'=' * 60}")
 
-        # Test on test set
+        # Đánh giá trên test set
         print("\nEvaluating on test set...")
 
+        # Load best model checkpoint
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             model.load_state_dict(checkpoint['model_state_dict'])
@@ -342,13 +415,15 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         else:
             print(f"Warning: {model_path} not found. Using current model state.")
 
+        # Validate trên test set với per-class report
         test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
             model, test_loader, criterion, show_report=True
         )
 
-        # Log test metrics
+        # Log test metrics vào MLflow
         log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
 
+        # In kết quả cuối cùng
         print(f"\n{'=' * 60}")
         print(f"TEST SET RESULTS:")
         print(f"{'=' * 60}")
@@ -359,7 +434,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         print(f"  Loss      : {test_loss:.4f}")
         print(f"{'=' * 60}\n")
 
-        # Log model to MLflow Model Registry
+        # Đăng ký model vào MLflow Model Registry
         log_model_registry(model, mode)
 
         return {
