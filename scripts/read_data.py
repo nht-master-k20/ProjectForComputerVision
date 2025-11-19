@@ -264,17 +264,16 @@ class ReadData:
         3. Lưu ảnh mới vào folder processed_data_clean/{split_name}.
         4. Trả về DataFrame với cột image_path đã cập nhật.
         """
-        save_dir = os.path.join(cls.CLEAN_DATA_ROOT, split_name)
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(cls.CLEAN_DATA_ROOT, exist_ok=True)
         
-        print(f"\nĐang xử lý làm sạch tập: {split_name} -> Lưu tại: {save_dir}")
+        print(f"\nĐang xử lý làm sạch tập: {split_name} -> Lưu tại: {cls.CLEAN_DATA_ROOT}")
         
         new_paths = []
         for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
             orig_path = row["image_path"]
             filename = os.path.basename(orig_path)
             
-            new_img_path = os.path.join(save_dir, filename)
+            new_img_path = os.path.join(cls.CLEAN_DATA_ROOT, filename)
             
             img = cv2.imread(orig_path)
             if img is not None:
