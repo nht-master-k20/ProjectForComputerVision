@@ -55,7 +55,7 @@ if __name__ == "__main__":
             'batch_size': params.get('batch_size'),
             'epochs': params.get('epochs')
         }
-        print(f'EfficientNetB3 Model: mode={mode}, image_size={image_size}, batch_size={batch_size}, epochs={epochs}')
+        print(f'EfficientNetB3 Model: mode={mode}, train_params={train_params}')
         EfficientNetB3.train(mode=mode, **train_params)
     else:
         print('Cannot find any argument. Supported arguments:')
