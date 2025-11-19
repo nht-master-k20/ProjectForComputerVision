@@ -1,6 +1,5 @@
 import argparse
-
-from models import EfficientNet
+from models import EfficientNetB3
 from scripts.read_data import ReadData
 
 
@@ -24,7 +23,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Skin Cancer Detection Training Pipeline')
     parser.add_argument("--read_data", nargs="*", required=False, help='Read data')
     parser.add_argument("--train_with_method_1", nargs="*", required=False, help='Train with method 1')
-    parser.add_argument("--train_with_efficientnet", nargs="*", required=False, help='Train with EfficientNet')
+    parser.add_argument("--train_with_efficientnet", nargs="*", required=False, help='Train with EfficientNetB3')
     args = parser.parse_args()
 
     read_data_args_list = args.read_data or []
@@ -50,11 +49,13 @@ if __name__ == "__main__":
         params = parse_args_list(train_with_efficientnet_args_list, ['mode', 'image_size', 'batch_size', 'epochs'])
 
         mode = params.get('mode')
-        image_size = params.get('image_size')
-        batch_size = params.get('batch_size')
-        epochs = params.get('epochs')
-        print(f'EfficientNet Model: mode={mode}, image_size={image_size}, batch_size={batch_size}, epochs={epochs}')
-        EfficientNet.train(mode=mode, image_size=image_size, batch_size=batch_size, epochs=epochs)
+        train_params = {
+            'image_size': int(params.get('image_size', 300)),
+            'batch_size': int(params.get('batch_size', 32)),
+            'epochs': int(params.get('epochs', 30))
+        }
+        print(f'EfficientNetB3 Model: mode={mode}, train_params={train_params}')
+        EfficientNetB3.train(mode=mode, **train_params)
     else:
         print('Cannot find any argument. Supported arguments:')
         print('  --read_data')

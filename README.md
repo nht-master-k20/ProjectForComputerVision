@@ -50,8 +50,7 @@ python main.py --<tên script> <tham số dùng trong script đó>
 Ví dụ:
 
 ```bash
-python main.py --read_data mode=raw
-python main.py --read_data mode=augment
-python main.py --train_with_method_1 epochs=10 batches=128
-python main.py --train_with_method_2 epochs=10 batches=128
+python main.py --read_data <params>
+python main.py --train_with_method_1 <params>
+python main.py --train_with_efficientnet <params>
 ```
