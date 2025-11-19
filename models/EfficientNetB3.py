@@ -133,9 +133,9 @@ def validate(model, loader, criterion):
 
     # Calculate all metrics
     accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
-    recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
-    f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+    precision = precision_score(all_labels, all_preds, average='weighted')
+    recall = recall_score(all_labels, all_preds, average='weighted')
+    f1 = f1_score(all_labels, all_preds, average='weighted')
 
     avg_loss = total_loss / len(loader)
 
@@ -194,7 +194,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    best_f1 = 0
+    best_f1 = -1
     patience_counter = 0
     early_stop_patience = 5
 
@@ -222,6 +222,12 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
             weight_decay=weight_decay
         )
 
+        checkpoint_dir = "checkpoints"
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        model_path = os.path.join(checkpoint_dir, f"best_efficientnet_b3_{mode}_{image_size}.pth")
+
+        print(f"Model checkpoint will be saved to: {model_path}\n")
+
         for epoch in range(epochs):
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
             val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion)
@@ -240,12 +246,10 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
             print(f"  Recall    : {val_recall * 100:.2f}%")
             print(f"  F1 Score  : {val_f1 * 100:.2f}%")
 
-            # Save best model based on F1 score
             if val_f1 > best_f1:
                 best_f1 = val_f1
                 patience_counter = 0
 
-                model_path = "best_efficient_net_b3.pth"
                 torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': model.state_dict(),
@@ -270,7 +274,7 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
 
             # Early stopping
             if patience_counter >= early_stop_patience:
-                print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+                print(f"\n⚠ Early stopping triggered after {epoch + 1} epochs")
                 mlflow.log_param("actual_epochs", epoch + 1)
                 break
 
@@ -278,10 +282,16 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         print(f"Training completed! Best F1: {best_f1 * 100:.2f}%")
         print(f"{'=' * 60}")
 
-        # Test on test set
+        # ✅ Test on test set với error handling
         print("\nEvaluating on test set...")
-        checkpoint = torch.load("best_efficient_net_b3.pth")
-        model.load_state_dict(checkpoint['model_state_dict'])
+
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            loaded_f1 = checkpoint['best_f1']
+            print(f"✓ Loaded best model from epoch {checkpoint['epoch']} (F1: {loaded_f1 * 100:.2f}%)")
+        else:
+            print(f"⚠ Warning: {model_path} not found. Using current model state.")
 
         test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion)
 
