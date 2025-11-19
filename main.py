@@ -51,9 +51,9 @@ if __name__ == "__main__":
 
         mode = params.get('mode')
         train_params = {
-            'image_size': params.get('image_size'),
-            'batch_size': params.get('batch_size'),
-            'epochs': params.get('epochs')
+            'image_size': int(params.get('image_size', 300)),
+            'batch_size': int(params.get('batch_size', 128)),
+            'epochs': int(params.get('epochs', 30))
         }
         print(f'EfficientNetB3 Model: mode={mode}, train_params={train_params}')
         EfficientNetB3.train(mode=mode, **train_params)
