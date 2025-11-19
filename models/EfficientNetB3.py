@@ -13,10 +13,10 @@ import mlflow
 import mlflow.pytorch
 
 # Cấu hình MLflow để kết nối với Databricks
-os.environ["DATABRICKS_HOST"] = "https://dbc-5d852ff6-7674.cloud.databricks.com"
-os.environ["DATABRICKS_TOKEN"] = "dapid40cb896d1a4c41fa62835b61811d2e1"
+os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
+os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nguyenduonghai07@gmail.com/SkinDiseaseClassificationEFFB3")
+mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3")
 
 
 def start_mlflow_run(run_name, mode, image_size):
