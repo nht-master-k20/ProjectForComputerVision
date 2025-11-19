@@ -1,9 +1,6 @@
 import argparse
-import os
-import torch
 from models import EfficientNetB3
 from scripts.read_data import ReadData
-
 
 def parse_args_list(args_list, allowed=None):
     if allowed is None:
@@ -20,86 +17,34 @@ def parse_args_list(args_list, allowed=None):
             print(f"Invalid argument format '{arg}'. Expected 'key=value'")
     return parsed
 
-
-def is_ddp():
-    """Detect if running inside torchrun multi-process mode"""
-    return (
-            "RANK" in os.environ and
-            "WORLD_SIZE" in os.environ and
-            "LOCAL_RANK" in os.environ
-    )
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Skin Cancer Detection Training Pipeline')
-    parser.add_argument("--read_data", nargs="*", required=False, help='Read data')
-    parser.add_argument("--train_with_method_1", nargs="*", required=False, help='Train with method 1')
-    parser.add_argument("--train_with_efficientnet", nargs="*", required=False, help='Train with EfficientNetB3')
+    parser.add_argument("--read_data", nargs="*", required=False)
+    parser.add_argument("--train_with_method_1", nargs="*", required=False)
+    parser.add_argument("--train_with_efficientnet", nargs="*", required=False)
     args = parser.parse_args()
 
     read_data_args_list = args.read_data or []
-    train_with_method_1_args_list = args.train_with_method_1 or []
-    train_with_efficientnet_args_list = args.train_with_efficientnet or []
+    train_method_1_args_list = args.train_with_method_1 or []
+    train_eff_args_list = args.train_with_efficientnet or []
 
-    # ===========================================================
-    # READ DATA
-    # ===========================================================
     if read_data_args_list:
         params = parse_args_list(read_data_args_list, allowed=['mode', 'clean'])
-
         mode = params.get('mode')
         clean = params.get('clean')
-        print(f"Debug parsed params: mode={mode}, clean={clean}")
         is_clean = True if clean == '1' else False
-
         ReadData.run(mode=mode, clean=is_clean)
-        print(f"Calling ReadData with: mode={mode}, clean={is_clean}")
 
-    # ===========================================================
-    # TRAIN WITH METHOD 1
-    # ===========================================================
-    elif train_with_method_1_args_list:
-        params = parse_args_list(train_with_method_1_args_list, ['epochs', 'batches'])
+    elif train_method_1_args_list:
+        params = parse_args_list(train_method_1_args_list, allowed=['epochs', 'batches'])
         print('METHOD 1')
 
-    # ===========================================================
-    # TRAIN WITH EFFICIENTNET
-    # ===========================================================
-    elif train_with_efficientnet_args_list:
-        params = parse_args_list(
-            train_with_efficientnet_args_list,
-            allowed=['mode', 'image_size', 'batch_size', 'epochs']
-        )
-
+    elif train_eff_args_list:
+        params = parse_args_list(train_eff_args_list, allowed=['mode', 'image_size', 'batch_size', 'epochs'])
         mode = params.get('mode')
         train_params = {
             'image_size': int(params.get('image_size', 300)),
             'batch_size': int(params.get('batch_size', 32)),
-            'epochs': int(params.get('epochs', 30)),
+            'epochs': int(params.get('epochs', 30))
         }
-
-        # =======================================================
-        # Detect Distributed Mode (torchrun)
-        # =======================================================
-        ddp_mode = is_ddp()
-        local_rank = int(os.environ["LOCAL_RANK"]) if ddp_mode else None
-
-        print(f"EFFICIENTNET TRAINING")
-        print(f" - mode={mode}")
-        print(f" - train_params={train_params}")
-        print(f" - ddp={ddp_mode}")
-        if ddp_mode:
-            print(f" - local_rank={local_rank}, world_size={os.environ['WORLD_SIZE']}")
-
-        EfficientNetB3.train(
-            mode=mode,
-            ddp=ddp_mode,
-            local_rank=local_rank,
-            **train_params
-        )
-
-    else:
-        print('Cannot find any argument. Supported arguments:')
-        print('  --read_data')
-        print('  --train_with_method_1')
-        print('  --train_with_efficientnet')
+        EfficientNetB3.train(mode=mode, **train_params)
