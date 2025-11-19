@@ -198,18 +198,8 @@ def validate(model, loader, criterion, show_report=False):
 
 
 def train(mode='raw', image_size=300, batch_size=128, epochs=30):
-    """
-    Hàm chính để train EfficientNet B3 model cho bài toán phân loại ung thư da
+    torch.cuda.empty_cache()
 
-    Args:
-        mode: Loại dataset ('raw', 'aug', 'clean')
-        image_size: Kích thước ảnh input
-        batch_size: Số lượng samples trong 1 batch
-        epochs: Số epoch tối đa
-
-    Returns:
-        Dictionary chứa best validation F1 và test metrics
-    """
     run_name = f"EfficientNetB3_imgsize{image_size}_bs{batch_size}_ep{epochs}_macro"
 
     # Đường dẫn đến các file CSV chứa dataset splits
