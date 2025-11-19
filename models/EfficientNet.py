@@ -3,7 +3,9 @@ import timm
 import torch.nn as nn
 import torch
 from torch.cuda.amp import GradScaler, autocast
-from scripts.get_dataset import get_dataset
+import pandas as pd
+
+from scripts.ISICDataset import ISICDataset
 
 
 def train_one_epoch(model, loader, optimizer, criterion, scaler):
@@ -70,14 +72,21 @@ def train(mode='raw', image_size=384, batch_size=16, epochs=10):
     #     val_path =
     #     test_path =
 
-    train_dataset, val_dataset, test_dataset = get_dataset(train_path, val_path, test_path, image_size)
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
+    test_df = pd.read_csv(test_path)
+
+    train_dataset = ISICDataset(train_df, img_size=image_size)
+    val_dataset   = ISICDataset(val_df,   img_size=image_size)
+    test_dataset  = ISICDataset(test_df,  img_size=image_size)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    val_loader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    test_loader  = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = timm.create_model("tf_efficientnet_b3_ns", pretrained=True, num_classes=2)
-    model = model.to("cuda")
+    model = model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     criterion = nn.CrossEntropyLoss()
