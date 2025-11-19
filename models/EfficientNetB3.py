@@ -158,10 +158,10 @@ def train(mode='raw', image_size=300, batch_size=128, epochs=30):
         train_path = 'dataset_splits_aug/train_augment.csv'
         val_path = 'dataset_splits_aug/val.csv'
         test_path = 'dataset_splits_aug/test.csv'
-    # elif mode == 'clean':
-    #     train_path =
-    #     val_path =
-    #     test_path =
+    elif mode == 'clean':
+        train_path = 'dataset_splits_aug_clean/clean_train_augment.csv'
+        val_path = 'dataset_splits_aug_clean/clean_val.csv'
+        test_path = 'dataset_splits_aug_clean/clean_test.csv'
 
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
