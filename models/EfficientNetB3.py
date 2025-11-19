@@ -93,11 +93,11 @@ def log_model_artifact(model_path):
 
 
 def log_model_registry(model, mode):
-    """Đăng ký model vào MLflow Model Registry"""
+    """Log model to MLflow Model Registry"""
     mlflow.pytorch.log_model(
         model,
         "model",
-        registered_model_name=f"EfficientNetB3_SkinCancer_{mode}"
+        registered_model_name=f"main.default.EfficientNetB3_SkinCancer_{mode}"
     )
 
 
