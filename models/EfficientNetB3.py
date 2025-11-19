@@ -197,7 +197,7 @@ def validate(model, loader, criterion, show_report=False):
     return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
 
-def train(mode='raw', image_size=300, batch_size=16, epochs=30):
+def train(mode='raw', image_size=300, batch_size=64, epochs=30):
     torch.cuda.empty_cache()
 
     run_name = f"EfficientNetB3_imgsize{image_size}_bs{batch_size}_ep{epochs}_macro"
