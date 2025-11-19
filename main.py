@@ -50,11 +50,13 @@ if __name__ == "__main__":
         params = parse_args_list(train_with_efficientnet_args_list, ['mode', 'image_size', 'batch_size', 'epochs'])
 
         mode = params.get('mode')
-        image_size = params.get('image_size')
-        batch_size = params.get('batch_size')
-        epochs = params.get('epochs')
+        train_params = {
+            'image_size': params.get('image_size'),
+            'batch_size': params.get('batch_size'),
+            'epochs': params.get('epochs')
+        }
         print(f'EfficientNetB3 Model: mode={mode}, image_size={image_size}, batch_size={batch_size}, epochs={epochs}')
-        EfficientNetB3.train(mode=mode, image_size=image_size, batch_size=batch_size, epochs=epochs)
+        EfficientNetB3.train(mode=mode, **train_params)
     else:
         print('Cannot find any argument. Supported arguments:')
         print('  --read_data')
