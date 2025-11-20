@@ -210,14 +210,6 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
         val_path = os.path.join(CSV_DIR, 'clean_val.csv')
         test_path = os.path.join(CSV_DIR, 'clean_test.csv')
 
-    elif mode == 'augment':
-        print("📢 Chế độ: AUGMENT (Dữ liệu sạch + Cân bằng lớp)")
-        # Train set: Đã Clean + Augmented (Balanced)
-        train_path = os.path.join(CSV_DIR, 'clean_train_augmented.csv')
-        # Val/Test set: Chỉ Clean (Không Augmented) để đánh giá khách quan
-        val_path = os.path.join(CSV_DIR, 'clean_val.csv')
-        test_path = os.path.join(CSV_DIR, 'clean_test.csv')
-
     else:
         raise ValueError(f"❌ Mode không hợp lệ: '{mode}'. Vui lòng chọn: 'raw', 'clean', hoặc 'augment'.")
 

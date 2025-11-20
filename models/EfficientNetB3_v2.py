@@ -231,14 +231,6 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
         val_path = os.path.join(CSV_DIR, 'clean_val.csv')
         test_path = os.path.join(CSV_DIR, 'clean_test.csv')
 
-    elif mode == 'augment':
-        print("📢 MODE: AUGMENT (Balanced, Hair Removed)")
-        # Train: Augmented & Balanced
-        train_path = os.path.join(CSV_DIR, 'clean_train_augmented.csv')
-        # Val/Test: Just Clean (No Augmentation)
-        val_path = os.path.join(CSV_DIR, 'clean_val.csv')
-        test_path = os.path.join(CSV_DIR, 'clean_test.csv')
-
     else:
         raise ValueError(f"❌ Invalid mode: {mode}. Use 'raw', 'clean', or 'augment'.")
 
