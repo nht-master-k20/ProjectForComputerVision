@@ -207,7 +207,7 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
 
     # ---------- CLASS WEIGHTS & SAMPLER ----------
-    labels = train_df['malignant'].values
+    labels = train_df['malignant'].values.astype(int)
     class_sample_count = np.array([len(np.where(labels==t)[0]) for t in np.unique(labels)])
     weight_per_class = 1. / class_sample_count
     sample_weights = np.array([weight_per_class[t] for t in labels])
