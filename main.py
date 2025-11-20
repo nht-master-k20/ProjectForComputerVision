@@ -45,6 +45,6 @@ if __name__ == "__main__":
         train_params = {
             'image_size': int(params.get('image_size', 300)),
             'batch_size': int(params.get('batch_size', 32)),
-            'epochs': int(params.get('epochs', 30))
+            'epochs': int(params.get('epochs', 10))
         }
         EfficientNetB3.train(mode=mode, **train_params)
