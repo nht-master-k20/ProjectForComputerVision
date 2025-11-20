@@ -44,7 +44,7 @@ if __name__ == "__main__":
         }
         EfficientNetB3.train(mode=mode, **train_params)
     elif train_eff_args_list_v2:
-        params = parse_args_list(train_eff_args_list, allowed=['mode', 'image_size', 'batch_size', 'epochs'])
+        params = parse_args_list(train_eff_args_list_v2, allowed=['mode', 'image_size', 'batch_size', 'epochs'])
         mode = params.get('mode')
         train_params = {
             'image_size': int(params.get('image_size', 300)),
