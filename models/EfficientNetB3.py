@@ -11,15 +11,16 @@ import numpy as np
 import os
 import mlflow
 import mlflow.pytorch
-import torch.distributed as dist
+from sklearn.model_selection import train_test_split
 
-# MLflow setup
+# --- 1. MLflow Configuration ---
 os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
 
+# --- 2. Helper Functions ---
 def start_mlflow_run(run_name):
     return mlflow.start_run(run_name=run_name)
 
@@ -51,10 +52,12 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         "mixed_precision": True,
         "metrics_average": "macro",
         "use_class_weights": class_weights is not None,
+        "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
     if class_weights is not None:
         params["class_weight_benign"] = float(class_weights[0])
-        params["class_weight_malignant"] = float(class_weights[1])
+        if len(class_weights) > 1:
+            params["class_weight_malignant"] = float(class_weights[1])
     mlflow.log_params(params)
 
 
@@ -81,172 +84,111 @@ def log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, 
     })
 
 
-def log_model_artifact(model_path):
-    mlflow.log_artifact(model_path)
-
-
-def is_main_process():
-    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
-
-
-def gather_lists_across_ranks(local_list):
-    if not dist.is_available() or not dist.is_initialized():
-        return local_list
-    gathered = [None for _ in range(dist.get_world_size())]
-    try:
-        dist.all_gather_object(gathered, local_list)
-    except Exception:
-        return local_list
-    out = []
-    for part in gathered:
-        if part:
-            out.extend(part)
-    return out
-
-
-def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0, ddp=False):
+# --- 3. Training & Validation Loops ---
+def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
     model.train()
     total_loss = 0.0
     count = 0
+
     for imgs, labels in loader:
         imgs = imgs.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
+
         optimizer.zero_grad()
+
         with autocast(device_type='cuda'):
             outputs = model(imgs)
             loss = criterion(outputs, labels)
+
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
         scaler.step(optimizer)
         scaler.update()
+
         total_loss += loss.item()
         count += 1
-    if ddp and dist.is_initialized():
-        t_loss = torch.tensor(total_loss, device='cuda')
-        t_count = torch.tensor(count, device='cuda')
-        dist.all_reduce(t_loss, op=dist.ReduceOp.SUM)
-        dist.all_reduce(t_count, op=dist.ReduceOp.SUM)
-        total_loss = t_loss.item()
-        count = t_count.item()
+
     return total_loss / max(1, count)
 
 
-def validate(model, loader, criterion, show_report=False, ddp=False):
+def validate(model, loader, criterion, show_report=False):
     model.eval()
     total_loss = 0.0
     all_preds = []
     all_labels = []
+
     with torch.no_grad():
         for imgs, labels in loader:
             imgs = imgs.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
+
             outputs = model(imgs)
             loss = criterion(outputs, labels)
+
             total_loss += loss.item()
             preds = outputs.argmax(1)
+
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
-    if ddp and dist.is_initialized():
-        gathered_preds = gather_lists_across_ranks(all_preds)
-        gathered_labels = gather_lists_across_ranks(all_labels)
-        local_count = len(all_labels)
-        t_loss = torch.tensor(total_loss, device='cuda')
-        t_count = torch.tensor(local_count, device='cuda')
-        dist.all_reduce(t_loss, op=dist.ReduceOp.SUM)
-        dist.all_reduce(t_count, op=dist.ReduceOp.SUM)
-        total_loss = t_loss.item()
-        total_count = t_count.item()
-        avg_loss = total_loss / max(1, total_count)
-        accuracy = 0.0;
-        macro_precision = 0.0;
-        macro_recall = 0.0;
-        macro_f1 = 0.0
-        if is_main_process():
-            accuracy = accuracy_score(gathered_labels, gathered_preds)
-            macro_precision = precision_score(gathered_labels, gathered_preds, average='macro', zero_division=0)
-            macro_recall = recall_score(gathered_labels, gathered_preds, average='macro', zero_division=0)
-            macro_f1 = f1_score(gathered_labels, gathered_preds, average='macro', zero_division=0)
-            if show_report:
-                print(classification_report(gathered_labels, gathered_preds,
-                                            target_names=['Benign (0)', 'Malignant (1)'], digits=4, zero_division=0))
-    else:
-        avg_loss = total_loss / max(1, len(loader))
-        accuracy = accuracy_score(all_labels, all_preds) if all_labels else 0.0
-        macro_precision = precision_score(all_labels, all_preds, average='macro',
-                                          zero_division=0) if all_labels else 0.0
-        macro_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
-        macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
-        if show_report:
-            print(classification_report(all_labels, all_preds,
-                                        target_names=['Benign (0)', 'Malignant (1)'], digits=4, zero_division=0))
+
+    avg_loss = total_loss / max(1, len(loader))
+    accuracy = accuracy_score(all_labels, all_preds) if all_labels else 0.0
+    macro_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
+    macro_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
+    macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
+
+    if show_report:
+        print(classification_report(all_labels, all_preds, target_names=['Benign', 'Malignant'], digits=4,
+                                    zero_division=0))
+
     return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
 
-def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+# --- 4. Main Training Function ---
+def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
     """
-    Hàm train chính với 3 chế độ bắt buộc:
-    - mode='raw': Dữ liệu gốc, chưa xử lý.
-    - mode='clean': Dữ liệu đã xóa lông.
-    - mode='augment': Dữ liệu đã xóa lông VÀ cân bằng.
+    Hàm train chính hỗ trợ 2 chế độ: 'raw' và 'clean'.
+    Chạy trên TOÀN BỘ dữ liệu.
     """
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"🖥️ Device: {device}")
 
-    # --- CẤU HÌNH ĐƯỜNG DẪN CSV ---
     CSV_DIR = 'dataset_splits'
 
-    # 👇 SỬA LỖI: Thêm lại block augment bị thiếu
+    # --- A. Chọn đường dẫn dữ liệu ---
     if mode == 'raw':
-        print("📢 Chế độ: RAW (Dữ liệu gốc)")
+        print("📢 Chế độ: RAW (Dữ liệu gốc, chưa xử lý)")
         train_path = os.path.join(CSV_DIR, 'raw_train.csv')
         val_path = os.path.join(CSV_DIR, 'raw_val.csv')
         test_path = os.path.join(CSV_DIR, 'raw_test.csv')
 
     elif mode == 'clean':
-        print("📢 Chế độ: CLEAN (Dữ liệu sạch - xóa lông)")
+        print("📢 Chế độ: CLEAN (Dữ liệu sạch - đã xóa lông)")
         train_path = os.path.join(CSV_DIR, 'clean_train.csv')
         val_path = os.path.join(CSV_DIR, 'clean_val.csv')
         test_path = os.path.join(CSV_DIR, 'clean_test.csv')
 
     else:
-        raise ValueError(f"❌ Mode không hợp lệ: '{mode}'. Vui lòng chọn: 'raw', 'clean', hoặc 'augment'.")
+        raise ValueError(f"❌ Mode không hợp lệ: '{mode}'. Chỉ hỗ trợ: 'raw', 'clean'.")
 
     # Kiểm tra file tồn tại
     for name, path in [('Train', train_path), ('Val', val_path), ('Test', test_path)]:
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"❌ Không tìm thấy file {name}: {path}.\n👉 Hãy chạy ReadData.run() trước.")
+                f"❌ Không tìm thấy file {name}: {path}. Hãy chạy ReadData.run(mode='{mode}', clean=True/False) trước.")
 
     print(f"📂 Loading Data from:\n - Train: {train_path}\n - Val:   {val_path}\n - Test:  {test_path}")
 
-    # Load CSV
+    # --- B. Load dữ liệu (FULL DATASET) ---
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
 
-    # -----------------------------------------------------------
-    # 👇 XỬ LÝ DEBUG SAMPLING (AN TOÀN)
-    # -----------------------------------------------------------
-    debug_size = 500
-    print(f"\n⚠️ WARNING: Đang chạy chế độ DEBUG với {debug_size} mẫu!")
+    print(f"📊 Data Summary:\n  - Train: {len(train_df)}\n  - Val:   {len(val_df)}\n  - Test:  {len(test_df)}")
 
-    # 1. Cắt tập Train: Cố gắng Stratify, nếu lỗi (do class quá ít) thì lấy random
-    if len(train_df) > debug_size:
-        try:
-            from sklearn.model_selection import train_test_split
-            train_df, _ = train_test_split(
-                train_df,
-                train_size=debug_size,
-                stratify=train_df['malignant'],  # Cố gắng chia đều tỉ lệ Benign/Malignant
-                random_state=42
-            )
-        except ValueError:
-            print("⚠️ Không thể Stratify (lớp thiểu số quá ít), chuyển sang Random Sampling.")
-            train_df = train_df.sample(n=debug_size, random_state=42)
-    # -----------------------------------------------------------
-
-    # DataLoaders
+    # --- D. DataLoaders ---
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
                               num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -254,60 +196,50 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # Model
+    # --- E. Model & Optimizer ---
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
 
-    # -----------------------------------------------------------
-    # 👇 TÍNH CLASS WEIGHTS (AN TOÀN TUYỆT ĐỐI)
-    # Ngăn chặn lỗi IndexError nếu mẫu debug xui xẻo chỉ có 1 class
-    # -----------------------------------------------------------
+    # --- F. Tính Class Weights (Giữ lại check an toàn) ---
     y_train = train_df['malignant'].values
     unique_classes = np.unique(y_train)
 
     if len(unique_classes) < 2:
-        print(f"⚠️ CẢNH BÁO: Mẫu debug chỉ chứa 1 lớp ({unique_classes}). Gán trọng số mặc định [1.0, 1.0].")
-        class_weights = np.array([1.0, 1.0])  # Fallback an toàn
+        print(f"⚠️ CẢNH BÁO: Dữ liệu train chỉ có 1 lớp ({unique_classes}). Gán trọng số mặc định [1.0, 1.0].")
+        class_weights = np.array([1.0, 1.0])
     else:
         class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0, 1]), y=y_train)
 
     print(f"⚖️ Class Weights: {class_weights}")
-
     class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+
     criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
-
     scaler = GradScaler()
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6
-    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
 
-    # MLflow Run
-    if is_main_process():
-        run_name = f"EfficientNetB3_{mode}_v3_DEBUG"
-        mlflow_run = start_mlflow_run(run_name)
-        log_training_params(
-            mode, image_size, batch_size, epochs, early_stop_patience=5,
-            train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
-            device=device, lr=base_lr, class_weights=class_weights
-        )
-    else:
-        mlflow_run = None
+    # --- G. MLflow & Directories ---
+    run_name = f"EfficientNetB3_{mode}_v3"
+    mlflow_run = start_mlflow_run(run_name)
+    log_training_params(
+        mode, image_size, batch_size, epochs, early_stop_patience=5,
+        train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
+        device=device, lr=base_lr, class_weights=class_weights
+    )
 
     best_f1 = -1
     patience_counter = 0
     delta = 0.005
     gradient_clip = 1.0
 
-    # Checkpoint directory
     model_save_dir = "checkpoints"
     os.makedirs(model_save_dir, exist_ok=True)
     model_path = os.path.join(model_save_dir, f"best_efficientnet_b3_{mode}_v3.pth")
 
     try:
-        # Training Loop
+        # --- H. Training Loop ---
         for epoch in range(epochs):
             current_lr = optimizer.param_groups[0]['lr']
-            print(f"🚀 Starting Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
+            print(f"🚀 Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
 
             if epoch < warmup_epochs:
                 warmup_lr = base_lr * (epoch + 1) / warmup_epochs
@@ -316,66 +248,41 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
             else:
                 cosine_scheduler.step(epoch - warmup_epochs)
 
-            train_loss = train_one_epoch(
-                model, train_loader, optimizer, criterion, scaler, gradient_clip
-            )
+            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip)
+            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion,
+                                                                            show_report=False)
 
-            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
-                model, val_loader, criterion, show_report=False
-            )
+            log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr)
+            print(
+                f"✅ Epoch [{epoch + 1}] | Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val F1: {val_f1:.4f} | Best F1: {best_f1:.4f}")
 
-            if is_main_process():
-                log_epoch_metrics(
-                    epoch, train_loss, val_loss, val_acc,
-                    val_precision, val_recall, val_f1, current_lr
-                )
+            if val_f1 > best_f1 * (1 + delta):
+                best_f1 = val_f1
+                patience_counter = 0
+                torch.save({'epoch': epoch + 1, 'model_state_dict': model.state_dict(), 'best_f1': best_f1}, model_path)
+                print(f"💾 Model saved: {model_path}")
+            else:
+                patience_counter += 1
 
-                print(
-                    f"✅ Epoch [{epoch + 1}/{epochs}] | "
-                    f"Train Loss: {train_loss:.4f} | "
-                    f"Val Loss: {val_loss:.4f} | "
-                    f"Val F1: {val_f1:.4f} | "
-                    f"Best F1: {best_f1:.4f} | "
-                    f"Patience: {patience_counter}/5"
-                )
+            if patience_counter >= 5:
+                print("🛑 Early stopping triggered")
+                mlflow.log_param("actual_epochs", epoch + 1)
+                break
 
-                if val_f1 > best_f1 * (1 + delta):
-                    best_f1 = val_f1
-                    patience_counter = 0
-                    torch.save({
-                        'epoch': epoch + 1,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'best_f1': best_f1
-                    }, model_path)
-                    print(f"💾 Model saved: {model_path}")
-                else:
-                    patience_counter += 1
-
-                if patience_counter >= 5:
-                    print("🛑 Early stopping triggered")
-                    mlflow.log_param("actual_epochs", epoch + 1)
-                    break
-
-        if is_main_process():
-            print(f"\n🧪 Evaluating on Test Set (Mode: {mode})...")
-            checkpoint = torch.load(model_path, map_location=device)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
-                model, test_loader, criterion, show_report=True
-            )
-            log_test_metrics(
-                test_loss, test_acc, test_precision, test_recall, test_f1, best_f1
-            )
+        # --- I. Test Evaluation ---
+        print(f"\n🧪 Evaluating on Test Set...")
+        checkpoint = torch.load(model_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion,
+                                                                             show_report=True)
+        log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
 
     except Exception as e:
-        if is_main_process():
-            print("❌ ERROR:", str(e))
-            mlflow.log_param("run_failed", True)
-            mlflow.log_param("error_message", str(e))
+        print("❌ ERROR:", str(e))
+        mlflow.log_param("run_failed", True)
+        mlflow.log_param("error_message", str(e))
         raise e
 
     finally:
-        if is_main_process():
-            print("🔚 MLflow run closed.")
-            mlflow.end_run()
+        print("🔚 MLflow run closed.")
+        mlflow.end_run()
