@@ -234,6 +234,9 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
 
+    print(f"\n⚠️ WARNING: Đang chạy chế độ DEBUG với {500} mẫu mỗi tập!")
+    train_df = train_df.head(500)
+
     # DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
                               num_workers=8, pin_memory=True)
