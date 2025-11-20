@@ -20,7 +20,7 @@ mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
 
-def start_mlflow_run(run_name, mode):
+def start_mlflow_run(run_name):
     return mlflow.start_run(run_name=run_name)
 
 
@@ -226,7 +226,15 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     test_df = pd.read_csv(test_path)
 
     print(f"\n⚠️ WARNING: Đang chạy chế độ DEBUG với {500} mẫu mỗi tập!")
-    train_df = train_df.head(500)
+    # Cắt tập Train: Dùng train_test_split để lấy 500 mẫu và đảm bảo chia đều class (stratify)
+    from sklearn.model_selection import train_test_split
+    if len(train_df) > 500:
+        train_df, _ = train_test_split(
+            train_df,
+            train_size=500,
+            stratify=train_df['malignant'],  # Quan trọng: Đảm bảo đủ 2 class
+            random_state=42
+        )
 
     # DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
