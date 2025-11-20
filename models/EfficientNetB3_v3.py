@@ -135,7 +135,7 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
 
     # A. MLflow Setup
     os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
-    os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
+    os.environ["DATABRICKS_TOKEN"] = "dapif865faf65e4f29f9f213de9b6f2ffa3c"
     mlflow.set_tracking_uri("databricks")
     mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
