@@ -8,7 +8,8 @@ import mlflow
 import mlflow.pytorch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.amp import GradScaler, autocast
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, classification_report
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, classification_report, \
+    confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from scripts.ISICDataset import ISICDataset
 
@@ -16,7 +17,7 @@ from scripts.ISICDataset import ISICDataset
 os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v2")
+mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
 
 # --- 2. CLASSES & HELPERS ---
@@ -41,7 +42,7 @@ def start_mlflow_run(run_name): return mlflow.start_run(run_name=run_name)
 def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
                         train_size, val_size, test_size, device, lr, weight_decay, class_weights=None):
     params = {
-        "version": "v2_Focal_Sampler",
+        "version": "v3_Bias_Threshold",
         "model": "tf_efficientnet_b3.ns_jft_in1k",
         "mode": mode,
         "image_size": image_size,
@@ -52,6 +53,7 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         "device": str(device),
         "loss_function": "FocalLoss",
         "sampler": "WeightedRandomSampler",
+        "technique": "BiasInit + DynamicThreshold",
         "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
     if class_weights is not None:
@@ -63,14 +65,36 @@ def log_metrics(prefix, metrics, step=None):
     mlflow.log_metrics(metrics, step=step)
 
 
-def calculate_metrics(y_true, y_pred, prefix="val"):
+def find_best_threshold(y_true, y_probs):
+    best_thresh, best_f1 = 0.5, 0.0
+    for thresh in np.arange(0.01, 0.90, 0.01):
+        y_pred = (y_probs >= thresh).astype(int)
+        f1 = f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0)
+        if f1 > best_f1: best_f1, best_thresh = f1, thresh
+    return best_thresh, best_f1
+
+
+def calculate_metrics(y_true, y_probs, threshold=0.5, prefix="val"):
+    y_pred = (y_probs >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     return {
         f"{prefix}_f1_macro": f1_score(y_true, y_pred, average='macro', zero_division=0),
         f"{prefix}_f1_malignant": f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_recall_malignant": recall_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_precision_malignant": precision_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
-        f"{prefix}_accuracy": accuracy_score(y_true, y_pred)
+        f"{prefix}_threshold": threshold,
+        f"{prefix}_TP": tp, f"{prefix}_FN": fn
     }
+
+
+def initialize_bias(model, device):
+    prior = 0.01  # Expectation of malignant probability
+    bias_value = -np.log((1 - prior) / prior)
+    if hasattr(model, 'classifier') and isinstance(model.classifier, nn.Linear):
+        with torch.no_grad(): model.classifier.bias.data.fill_(bias_value)
+        print(f"🔧 Bias Initialized: {bias_value:.4f}")
+    model.to(device)
+    return model
 
 
 # --- 3. LOOPS ---
@@ -93,29 +117,27 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1
     return total_loss / max(1, count)
 
 
-def validate(model, loader, criterion, show_report=False):
+def validate(model, loader, criterion):
     model.eval()
     total_loss = 0.0
-    all_preds, all_labels = [], []
+    all_probs, all_labels = [], []
     with torch.no_grad():
         for imgs, labels in loader:
             imgs, labels = imgs.cuda(non_blocking=True), labels.cuda(non_blocking=True)
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-            all_preds.extend(outputs.argmax(1).cpu().tolist())
+            # v3: Save PROBABILITIES for threshold tuning
+            all_probs.extend(torch.softmax(outputs, dim=1)[:, 1].cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
-    if show_report:
-        print(classification_report(all_labels, all_preds, target_names=['Benign', 'Malignant'], digits=4,
-                                    zero_division=0))
-    return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_preds)
+    return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_probs)
 
 
 # --- 4. MAIN TRAIN ---
 def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🖥️ Device: {device} | Version: v2 (Focal + Sampler)")
+    print(f"🖥️ Device: {device} | Version: v3 (Bias + Dynamic Threshold)")
 
     # A. Load Data
     CSV_DIR = 'dataset_splits'
@@ -140,7 +162,7 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
     sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
     print("✅ WeightedRandomSampler activated.")
 
-    # C. DataLoaders (Shuffle=False when Sampler is used)
+    # C. DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, sampler=sampler,
                               num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -148,20 +170,22 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # D. Model Setup
-    model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
+    # D. Model Setup (With Bias Init)
+    model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
+    model = initialize_bias(model, device)  # <--- v3 specific
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
     criterion = FocalLoss(gamma=2.0, weight=torch.FloatTensor(class_weights).to(device))
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
 
     # E. Train Loop
-    start_mlflow_run(f"EffB3_{mode}_v2")
+    start_mlflow_run(f"EffB3_{mode}_v3")
     log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
                         base_lr, 0.01, class_weights)
 
-    best_f1, patience = -1, 0
-    model_path = f"checkpoints/best_effb3_{mode}_v2.pth"
+    best_f1, patience, best_thresh_val = -1, 0, 0.5
+    model_path = f"checkpoints/best_effb3_{mode}_v3.pth"
     os.makedirs("checkpoints", exist_ok=True)
 
     try:
@@ -174,30 +198,36 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
                 scheduler.step(epoch - warmup_epochs)
 
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
-            val_loss, val_labels, val_preds = validate(model, val_loader, criterion)
+            val_loss, val_labels, val_probs = validate(model, val_loader, criterion)
 
-            metrics = calculate_metrics(val_labels, val_preds, prefix="val")
-            # Logging metrics including F1 Malignant (Critical for v2)
+            # v3: Find dynamic threshold
+            optimal_threshold, best_val_f1_mal = find_best_threshold(val_labels, val_probs)
+            metrics = calculate_metrics(val_labels, val_probs, threshold=optimal_threshold, prefix="val")
+
             log_metrics("val", {**metrics, "train_loss": train_loss, "val_loss": val_loss}, step=epoch)
-
             print(
-                f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Macro: {metrics['val_f1_macro']:.4f} | F1 Mal: {metrics['val_f1_malignant']:.4f}")
+                f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Thresh: {optimal_threshold:.2f} | F1 Mal: {best_val_f1_mal:.4f}")
 
-            # Early stopping based on F1 Malignant (better for imbalance)
-            if metrics['val_f1_malignant'] > best_f1 * 1.005:
-                best_f1, patience = metrics['val_f1_malignant'], 0
-                torch.save(model.state_dict(), model_path)
-                print(f"💾 Saved: {model_path}")
+            if best_val_f1_mal > best_f1 * 1.005:
+                best_f1, best_thresh_val, patience = best_val_f1_mal, optimal_threshold, 0
+                torch.save({'state_dict': model.state_dict(), 'threshold': best_thresh_val}, model_path)
+                print(f"💾 Saved with thresh {best_thresh_val:.2f}: {model_path}")
             else:
                 patience += 1
                 if patience >= 5: print("🛑 Early Stopping"); break
 
-        print(f"\n🧪 Testing Best Model...")
-        model.load_state_dict(torch.load(model_path))
-        test_loss, test_labels, test_preds = validate(model, test_loader, criterion, show_report=True)
-        test_metrics = calculate_metrics(test_labels, test_preds, prefix="test")
+        print(f"\n🧪 Testing Best Model (Thresh={best_thresh_val:.2f})...")
+        ckpt = torch.load(model_path)
+        model.load_state_dict(ckpt['state_dict'])
+        loaded_thresh = ckpt.get('threshold', 0.5)
+
+        test_loss, test_labels, test_probs = validate(model, test_loader, criterion)
+        test_metrics = calculate_metrics(test_labels, test_probs, threshold=loaded_thresh, prefix="test")
+
+        print(classification_report(test_labels, (test_probs >= loaded_thresh).astype(int),
+                                    target_names=['Benign', 'Malignant'], digits=4))
         log_metrics("test", {**test_metrics, "test_loss": test_loss})
 
     finally:
         mlflow.end_run()
-        print("🔚 Done v2.")
+        print("🔚 Done v3.")
