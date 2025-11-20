@@ -20,8 +20,7 @@ mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
 
-def start_mlflow_run(run_name, mode, image_size):
-    run_name = run_name or f"EfficientNetB3_{mode}_{image_size}"
+def start_mlflow_run(run_name, mode):
     return mlflow.start_run(run_name=run_name)
 
 
@@ -259,8 +258,8 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
 
     # MLflow Run
     if is_main_process():
-        run_name = f"EfficientNetB3_{mode}"
-        mlflow_run = start_mlflow_run(run_name, mode, image_size)
+        run_name = f"EfficientNetB3_{mode}_v3"
+        mlflow_run = start_mlflow_run(run_name, mode)
         log_training_params(
             mode, image_size, batch_size, epochs, early_stop_patience=5,
             train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
@@ -277,7 +276,7 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     # Checkpoint directory
     model_save_dir = "checkpoints"
     os.makedirs(model_save_dir, exist_ok=True)
-    model_path = os.path.join(model_save_dir, f"best_efficientnet_b3_{mode}.pth")
+    model_path = os.path.join(model_save_dir, f"best_efficientnet_b3_{mode}_v3.pth")
 
     try:
         # Training Loop
