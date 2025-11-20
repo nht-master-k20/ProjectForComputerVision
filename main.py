@@ -2,64 +2,81 @@ import argparse
 import sys
 import os
 
-# --- CẤU HÌNH CỐ ĐỊNH ---
-TRAIN_CONFIG = {
+# --- 1. CẤU HÌNH CHUNG (SỬA THAM SỐ TẠI ĐÂY) ---
+CONFIG = {
     "image_size": 300,
     "batch_size": 32,
-    "epochs": 15,
+    "epochs": 20,
     "lr": 1e-3,
-    # Luôn dùng dữ liệu đã qua xử lý
-    "data_mode": "processed"
+    "data_mode": "clean"  # Chọn 'clean' hoặc 'raw'
 }
 
-# --- IMPORT ---
+# --- 2. SETUP PATHS ---
 sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'models'))
 
-try:
-    from scripts.ReadData import ReadData
-    import models.EfficientNetB3_v1 as v1
-    import models.EfficientNetB3_v2 as v2
-    import models.EfficientNetB3_v3 as v3
-except ImportError as e:
-    print(f"⚠️ Lỗi Import: {e}")
-    sys.exit(1)
 
-MODEL_MAP = {'v1': v1, 'v2': v2, 'v3': v3}
+# --- 3. XỬ LÝ CHÍNH ---
+def run_task(task_name):
+    print(f"\n[MAIN] 🚀 Đang khởi chạy tác vụ: {task_name.upper()}")
 
+    # --- TRƯỜNG HỢP 1: CHUẨN BỊ DỮ LIỆU ---
+    if task_name == 'data':
+        try:
+            # Lazy import: Chỉ import khi cần dùng để tránh lỗi MLflow ở file model
+            from scripts.ReadData import ReadData
+            print(f"   ⚙️ Cấu hình: Mode={CONFIG['data_mode']} | Clean=True")
+            # Mặc định luôn bật clean
+            ReadData.run(mode=CONFIG['data_mode'], clean=True)
+        except ImportError as e:
+            print(f"❌ Lỗi Import ReadData: {e}")
+        except Exception as e:
+            print(f"❌ Lỗi xử lý dữ liệu: {e}")
+        return
 
-def main():
-    parser = argparse.ArgumentParser(description="Skin Cancer Pipeline (Simlified)")
+    # --- TRƯỜNG HỢP 2: HUẤN LUYỆN (Lazy Import Model) ---
+    module = None
+    try:
+        if task_name == 'v1':
+            import models.EfficientNetB3_v1 as module
+        elif task_name == 'v2':
+            import models.EfficientNetB3_v2 as module
+        elif task_name == 'v3':
+            import models.EfficientNetB3_v3 as module
+        # Đã loại bỏ v4
+        else:
+            print(f"❌ Lệnh '{task_name}' không hợp lệ. Chọn: data, v1, v2, v3")
+            return
+    except ImportError as e:
+        print(f"❌ Lỗi Import Model {task_name}: {e}")
+        print("👉 Kiểm tra xem file model (EfficientNetB3_vX.py) có tồn tại trong thư mục 'models/' chưa.")
+        return
 
-    # Chỉ nhận 1 tham số: data HOẶC version model
-    parser.add_argument("task", type=str,
-                        choices=['data', 'v1', 'v2', 'v3'],
-                        help="Chọn tác vụ: 'data' để xử lý ảnh, hoặc 'v3' để train model v3")
-
-    args = parser.parse_args()
-
-    # --- 1. XỬ LÝ DỮ LIỆU ---
-    if args.task == 'data':
-        # Gọi hàm run không cần tham số
-        ReadData.run()
-
-    # --- 2. TRAIN MODEL ---
-    elif args.task in MODEL_MAP:
-        print(f"\n🚀 Đang khởi động Train Model {args.task.upper()}...")
-        print(f"   ⚙️ Config: {TRAIN_CONFIG}")
-
-        module = MODEL_MAP[args.task]
+    # Chạy Training
+    if module:
+        print(f"   ⚙️ Cấu hình Train: {CONFIG}")
         try:
             module.train(
-                mode=TRAIN_CONFIG['data_mode'],  # Luôn là 'processed'
-                image_size=TRAIN_CONFIG['image_size'],
-                batch_size=TRAIN_CONFIG['batch_size'],
-                epochs=TRAIN_CONFIG['epochs'],
-                base_lr=TRAIN_CONFIG['lr']
+                mode=CONFIG['data_mode'],
+                image_size=CONFIG['image_size'],
+                batch_size=CONFIG['batch_size'],
+                epochs=CONFIG['epochs'],
+                base_lr=CONFIG['lr']
             )
         except Exception as e:
             print(f"❌ Lỗi Training: {e}")
+            raise e
 
 
+# --- 4. ENTRY POINT ---
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Simple Skin Cancer CLI')
+
+    # Chỉ cho phép chọn data, v1, v2, v3
+    parser.add_argument('task', type=str,
+                        choices=['data', 'v1', 'v2', 'v3'],
+                        help='Chọn tác vụ: data (xử lý ảnh), hoặc version model (v1, v2, v3)')
+
+    args = parser.parse_args()
+
+    run_task(args.task)
