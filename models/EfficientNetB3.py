@@ -19,9 +19,11 @@ os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3")
 
+
 def start_mlflow_run(run_name, mode, image_size):
     run_name = run_name or f"EfficientNetB3_{mode}_{image_size}"
     return mlflow.start_run(run_name=run_name)
+
 
 def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
                         train_size, val_size, test_size, device, lr=1e-3, weight_decay=0.01,
@@ -56,6 +58,7 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         params["class_weight_malignant"] = float(class_weights[1])
     mlflow.log_params(params)
 
+
 def log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr):
     mlflow.log_metrics({
         "train_loss": train_loss,
@@ -67,6 +70,7 @@ def log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_r
         "learning_rate": current_lr,
     }, step=epoch)
 
+
 def log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_val_f1):
     mlflow.log_metrics({
         "test_loss": test_loss,
@@ -77,11 +81,14 @@ def log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, 
         "best_val_f1": best_val_f1,
     })
 
+
 def log_model_artifact(model_path):
     mlflow.log_artifact(model_path)
 
+
 def is_main_process():
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
 
 def gather_lists_across_ranks(local_list):
     if not dist.is_available() or not dist.is_initialized():
@@ -96,6 +103,7 @@ def gather_lists_across_ranks(local_list):
         if part:
             out.extend(part)
     return out
+
 
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0, ddp=False):
     model.train()
@@ -124,6 +132,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1
         count = t_count.item()
     return total_loss / max(1, count)
 
+
 def validate(model, loader, criterion, show_report=False, ddp=False):
     model.eval()
     total_loss = 0.0
@@ -150,7 +159,10 @@ def validate(model, loader, criterion, show_report=False, ddp=False):
         total_loss = t_loss.item()
         total_count = t_count.item()
         avg_loss = total_loss / max(1, total_count)
-        accuracy = 0.0; macro_precision = 0.0; macro_recall = 0.0; macro_f1 = 0.0
+        accuracy = 0.0;
+        macro_precision = 0.0;
+        macro_recall = 0.0;
+        macro_f1 = 0.0
         if is_main_process():
             accuracy = accuracy_score(gathered_labels, gathered_preds)
             macro_precision = precision_score(gathered_labels, gathered_preds, average='macro', zero_division=0)
@@ -162,7 +174,8 @@ def validate(model, loader, criterion, show_report=False, ddp=False):
     else:
         avg_loss = total_loss / max(1, len(loader))
         accuracy = accuracy_score(all_labels, all_preds) if all_labels else 0.0
-        macro_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
+        macro_precision = precision_score(all_labels, all_preds, average='macro',
+                                          zero_division=0) if all_labels else 0.0
         macro_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
         macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0) if all_labels else 0.0
         if show_report:
@@ -170,42 +183,86 @@ def validate(model, loader, criterion, show_report=False, ddp=False):
                                         target_names=['Benign (0)', 'Malignant (1)'], digits=4, zero_division=0))
     return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
-def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+
+def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+    """
+    Hàm train chính với 3 chế độ bắt buộc:
+    - mode='raw': Dữ liệu gốc, chưa xử lý.
+    - mode='clean': Dữ liệu đã xóa lông (nhưng chưa cân bằng/augment).
+    - mode='augment': Dữ liệu đã xóa lông VÀ cân bằng (sinh thêm ảnh).
+    """
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load CSV paths
-    if mode == 'raw':
-        train_path, val_path, test_path = 'dataset_splits/train_raw.csv', 'dataset_splits/val.csv', 'dataset_splits/test.csv'
-    elif mode == 'aug':
-        train_path, val_path, test_path = 'dataset_splits_aug/train_augment.csv', 'dataset_splits_aug/val.csv', 'dataset_splits_aug/test.csv'
-    elif mode == 'clean':
-        train_path, val_path, test_path = 'dataset_splits_aug_clean/clean_train_augment.csv', 'dataset_splits_aug_clean/clean_val.csv', 'dataset_splits_aug_clean/clean_test.csv'
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
+    # --- CẤU HÌNH ĐƯỜNG DẪN CSV ---
+    # Tất cả file CSV đều nằm trong thư mục này (do class ReadData sinh ra)
+    CSV_DIR = 'dataset_splits'
 
-    train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
+    if mode == 'raw':
+        print("📢 Chế độ: RAW (Dữ liệu gốc)")
+        train_path = os.path.join(CSV_DIR, 'raw_train.csv')
+        val_path = os.path.join(CSV_DIR, 'raw_val.csv')
+        test_path = os.path.join(CSV_DIR, 'raw_test.csv')
+
+    elif mode == 'clean':
+        print("📢 Chế độ: CLEAN (Dữ liệu sạch - xóa lông)")
+        train_path = os.path.join(CSV_DIR, 'clean_train.csv')
+        val_path = os.path.join(CSV_DIR, 'clean_val.csv')
+        test_path = os.path.join(CSV_DIR, 'clean_test.csv')
+
+    elif mode == 'augment':
+        print("📢 Chế độ: AUGMENT (Dữ liệu sạch + Cân bằng lớp)")
+        # Train set: Đã Clean + Augmented (Balanced)
+        train_path = os.path.join(CSV_DIR, 'clean_train_augmented.csv')
+        # Val/Test set: Chỉ Clean (Không Augmented) để đánh giá khách quan
+        val_path = os.path.join(CSV_DIR, 'clean_val.csv')
+        test_path = os.path.join(CSV_DIR, 'clean_test.csv')
+
+    else:
+        raise ValueError(f"❌ Mode không hợp lệ: '{mode}'. Vui lòng chọn: 'raw', 'clean', hoặc 'augment'.")
+
+    # Kiểm tra file tồn tại
+    for name, path in [('Train', train_path), ('Val', val_path), ('Test', test_path)]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"❌ Không tìm thấy file {name}: {path}.\n👉 Hãy chạy ReadData.run(mode='{mode if mode != 'clean' else 'raw'}', clean=True) trước.")
+
+    print(f"📂 Loading Data from:\n - Train: {train_path}\n - Val:   {val_path}\n - Test:  {test_path}")
+
+    # Load CSV
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
+    test_df = pd.read_csv(test_path)
 
     # DataLoaders
-    train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
+                              num_workers=8, pin_memory=True)
+    val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
+                            num_workers=8, pin_memory=True)
+    test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
+                             num_workers=8, pin_memory=True)
 
     # Model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
 
-    # Optimizer, criterion, scheduler
+    # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
-    class_weights = torch.FloatTensor(
-        compute_class_weight('balanced', classes=np.array([0, 1]), y=train_df['malignant'].values)
-    ).to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+    # Class Weights: Tính toán tự động dựa trên dữ liệu Train load được
+    # - Raw/Clean: Thường mất cân bằng -> Trọng số sẽ cao cho lớp Ác tính.
+    # - Augment: Đã cân bằng -> Trọng số xấp xỉ 1:1.
+    y_train = train_df['malignant'].values
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
+    class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+    print(f"⚖️ Class Weights: {class_weights}")
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
     scaler = GradScaler()
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6
     )
 
-    # MLflow run
+    # MLflow Run
     if is_main_process():
         run_name = f"EfficientNetB3_{mode}"
         mlflow_run = start_mlflow_run(run_name, mode, image_size)
@@ -221,16 +278,19 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     patience_counter = 0
     delta = 0.005
     gradient_clip = 1.0
-    model_path = f"checkpoints/best_efficientnet_b3_{mode}.pth"
-    os.makedirs("checkpoints", exist_ok=True)
+
+    # Checkpoint directory
+    model_save_dir = "checkpoints"
+    os.makedirs(model_save_dir, exist_ok=True)
+    model_path = os.path.join(model_save_dir, f"best_efficientnet_b3_{mode}.pth")
 
     try:
-        # Training loop
+        # Training Loop
         for epoch in range(epochs):
             current_lr = optimizer.param_groups[0]['lr']
             print(f"🚀 Starting Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
 
-            # Warmup LR
+            # Warmup
             if epoch < warmup_epochs:
                 warmup_lr = base_lr * (epoch + 1) / warmup_epochs
                 for g in optimizer.param_groups:
@@ -238,12 +298,12 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
             else:
                 cosine_scheduler.step(epoch - warmup_epochs)
 
-            # Train
+            # Train Step
             train_loss = train_one_epoch(
                 model, train_loader, optimizer, criterion, scaler, gradient_clip
             )
 
-            # Validate
+            # Validation Step
             val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
                 model, val_loader, criterion, show_report=False
             )
@@ -255,43 +315,36 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
                 )
 
                 print(
-                    f"✅ Finished Epoch [{epoch + 1}/{epochs}] | "
-                    f"LR: {current_lr:.6f} | "
+                    f"✅ Epoch [{epoch + 1}/{epochs}] | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Val Loss: {val_loss:.4f} | "
-                    f"Val Acc: {val_acc:.4f} | "
-                    f"Val Precision: {val_precision:.4f} | "
-                    f"Val Recall: {val_recall:.4f} | "
                     f"Val F1: {val_f1:.4f} | "
-                    f"Best Val F1: {best_f1:.4f} | "
+                    f"Best F1: {best_f1:.4f} | "
                     f"Patience: {patience_counter}/5"
                 )
 
-                # Early stopping
+                # Early Stopping & Save Best Model
                 if val_f1 > best_f1 * (1 + delta):
                     best_f1 = val_f1
                     patience_counter = 0
-
-                    torch.save(
-                        {
-                            'epoch': epoch + 1,
-                            'model_state_dict': model.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'best_f1': best_f1
-                        },
-                        model_path
-                    )
-                    log_model_artifact(model_path)
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'best_f1': best_f1
+                    }, model_path)
+                    print(f"💾 Model saved: {model_path}")
                 else:
                     patience_counter += 1
 
                 if patience_counter >= 5:
-                    print("Early stopping triggered")
+                    print("🛑 Early stopping triggered")
                     mlflow.log_param("actual_epochs", epoch + 1)
                     break
 
-        # Test set evaluation
+        # Final Evaluation on Test Set
         if is_main_process():
+            print(f"\n🧪 Evaluating on Test Set (Mode: {mode})...")
             checkpoint = torch.load(model_path, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
 
@@ -305,7 +358,7 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
 
     except Exception as e:
         if is_main_process():
-            print("❌ ERROR during training:", str(e))
+            print("❌ ERROR:", str(e))
             mlflow.log_param("run_failed", True)
             mlflow.log_param("error_message", str(e))
         raise e
