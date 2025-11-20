@@ -29,9 +29,11 @@ if __name__ == "__main__":
     train_eff_args_list_v2 = args.train_with_efficientnet_v2 or []
 
     if read_data_args_list:
-        params = parse_args_list(read_data_args_list, allowed=['mode'])
+        params = parse_args_list(read_data_args_list, allowed=['mode', 'clean'])
         mode = params.get('mode')
-        ReadData.run(mode=mode)
+        clean = params.get('clean')
+        is_clean = True if clean == '1' else False
+        ReadData.run(mode=mode, clean=is_clean)
     elif train_eff_args_list:
         params = parse_args_list(train_eff_args_list, allowed=['mode', 'image_size', 'batch_size', 'epochs'])
         mode = params.get('mode')
