@@ -267,7 +267,7 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     # MLflow Run
     if is_main_process():
         run_name = f"EfficientNetB3_{mode}_v3"
-        mlflow_run = start_mlflow_run(run_name, mode)
+        mlflow_run = start_mlflow_run(run_name)
         log_training_params(
             mode, image_size, batch_size, epochs, early_stop_patience=5,
             train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
