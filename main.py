@@ -1,6 +1,6 @@
 import argparse
 from models import EfficientNetB3, EfficientNetB3_v2
-from scripts.read_data import ReadData
+from scripts.read_data2 import ReadData
 
 def parse_args_list(args_list, allowed=None):
     if allowed is None:
@@ -29,11 +29,9 @@ if __name__ == "__main__":
     train_eff_args_list_v2 = args.train_with_efficientnet_v2 or []
 
     if read_data_args_list:
-        params = parse_args_list(read_data_args_list, allowed=['mode', 'clean'])
+        params = parse_args_list(read_data_args_list, allowed=['mode'])
         mode = params.get('mode')
-        clean = params.get('clean')
-        is_clean = True if clean == '1' else False
-        ReadData.run(mode=mode, clean=is_clean)
+        ReadData.run(mode=mode)
     elif train_eff_args_list:
         params = parse_args_list(train_eff_args_list, allowed=['mode', 'image_size', 'batch_size', 'epochs'])
         mode = params.get('mode')
