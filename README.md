@@ -1,56 +1,135 @@
 # Phân Loại Các Loại Tổn Thương Trên Da
-**Xử lý ảnh và thị giác máy tính (CS2203.CH200)**
 
----
+**Môn học: Xử lý ảnh và Thị giác máy tính (CS2203.CH200)**
 
-### 🎯 Mục tiêu đề tài
-Xây dựng mô hình học máy có khả năng **phân loại các loại tổn thương trên da** từ hình ảnh, hỗ trợ nhận diện sớm các dấu hiệu bệnh lý về da liễu.
+------------------------------------------------------------------------
 
-### 📂 Dataset sử dụng
-Dataset lấy từ bài báo khoa học Nature: 
-**SkinExplainer: A Comprehensive Dataset and Benchmark for Skin Disease Classification** 
+## 🎯 1. Mục tiêu đề tài
 
-Link dataset: https://www.nature.com/articles/s41597-024-03743-w
+Đề tài hướng đến việc xây dựng một hệ thống học sâu có khả năng:
 
-### 🧠 Tóm tắt phương pháp tiếp cận
+-   **Phân loại các loại tổn thương trên da** từ hình ảnh chụp lâm sàng
+-   Hỗ trợ **nhận diện sớm các dấu hiệu bệnh lý da liễu**
+-   Ứng dụng các kỹ thuật xử lý ảnh, tăng cường dữ liệu và mô hình học
+    sâu hiện đại
+-   Tối ưu hóa mô hình với các kỹ thuật:
+    -   Focal Loss
+    -   Class Weighting
+    -   Weighted Sampling
+    -   Dynamic Thresholding
+    -   Bias Initialization
 
+------------------------------------------------------------------------
 
-### 🛠️ Công nghệ, thư viện sử dụng
+## 📂 2. Dataset sử dụng
 
+Dataset lấy từ nghiên cứu đăng trên tạp chí Nature:
 
-### 📈 Kết quả mong đợi
+**SkinExplainer: A Comprehensive Dataset and Benchmark for Skin Disease
+Classification**
+https://www.nature.com/articles/s41597-024-03743-w
 
+------------------------------------------------------------------------
 
-### 📑 Tài liệu tham khảo
+## 🧠 3. Tóm tắt phương pháp tiếp cận
 
----
+### 1️⃣ Xử lý dữ liệu
 
-### ⚙️ Cấu trúc project
-Tổ chức và thực thi thông qua từng **script module**. 
-Mỗi script được xây dựng dưới dạng **một Class chính**, trong đó bao gồm các **phương thức xử lý** logic cụ thể. 
-Việc thực thi script được điều phối tập trung thông qua file `main.py`.
+-   Load metadata
+-   Stratified split Train/Val/Test
+-   Hair removal + resize 300x300
+-   Clean đa luồng bằng ProcessPoolExecutor
 
-#### 1. Bố cục
-- Tất cả các script phải được đặt trong thư mục `scripts/`.
-- Dataset phải được đặt trong thư mục `dataset/`.
-- Mỗi file script tương ứng với **một tác vụ**.
+### 2️⃣ Augmentation
 
-#### 2. Script
-- Mỗi script **phải có một class chính** đại diện cho tác vụ cần thực thi.
-- Bên trong class bao gồm các **hàm con (method)** phục vụ cho từng bước xử lý.
-- Class **bắt buộc phải có hàm `run()`** làm điểm vào chính của tác vụ.
+-   Chỉ áp dụng cho lớp malignant
+-   Albumentations: flip, rotate, distortion, color jitter
+-   Sinh ảnh offline tăng số lượng mẫu thiểu số
 
-#### 3. Cách thực thi script
-Chạy chương trình thông qua `main.py`, truyền tên script cần thực thi và (các) tham số `dưới dạng key=value`:
+### 3️⃣ Huấn luyện mô hình
+- **v1**: CrossEntropyLoss baseline
+- **v2**: Focal Loss + WeightedRandomSampler
+- **v3**: Focal + Sampler + BiasInit + Dynamic Threshold
 
-```bash
-python main.py --<tên script> <tham số dùng trong script đó>
-```
+### 4️⃣ Tracking
 
-Ví dụ:
+-   MLflow log toàn bộ chỉ số Train/Val/Test
+-   Lưu best model theo F1-malignant
 
-```bash
-python main.py --read_data <params>
-python main.py --train_with_method_1 <params>
-python main.py --train_with_efficientnet <params>
-```
+------------------------------------------------------------------------
+
+## 🛠️ 4. Công nghệ sử dụng
+
+-   PyTorch, timm
+-   Albumentations
+-   OpenCV
+-   Pandas, NumPy
+-   MLflow
+-   scikit-learn
+
+------------------------------------------------------------------------
+
+## 📈 5. Kết quả mong đợi
+
+-   F1-malignant cao
+-   Giảm overfitting
+-   Cải thiện độ chính xác nhận diện tổn thương ác tính
+-   Xuất classification report + confusion matrix trên tập Test
+
+------------------------------------------------------------------------
+
+## 📁 6. Cấu trúc project
+
+    project/
+    │── main.py
+    │── README.md
+    │
+    ├── scripts/
+    │   ├── ReadData.py
+    │   └── ISICDataset.py
+    │
+    ├── models/
+    │   ├── EfficientNetB3_v1.py
+    │   ├── EfficientNetB3_v2.py
+    │   └── EfficientNetB3_v3.py
+    │
+    ├── dataset/
+    │   ├── ISIC_2024_Training_Input/
+    │   └── ISIC_2024_Training_GroundTruth.csv
+    │
+    └── dataset_splits/
+        ├── processed_train.csv
+        ├── processed_val.csv
+        └── processed_test.csv
+
+------------------------------------------------------------------------
+
+## ⚙️ 7. Cách chạy project
+
+### Xử lý dữ liệu
+
+    python main.py data
+
+### Train mô hình
+
+Baseline:
+
+    python main.py v1
+
+Focal + Sampler:
+
+    python main.py v2
+
+BiasInit + Dynamic Threshold:
+
+    python main.py v3
+
+------------------------------------------------------------------------
+
+## 📑 8. Tài liệu tham khảo
+
+-   SkinExplainer Dataset (Nature)
+-   EfficientNet
+-   Albumentations
+-   PyTorch Docs
+-   MLflow Docs
