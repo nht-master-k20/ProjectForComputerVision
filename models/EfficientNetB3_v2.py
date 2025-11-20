@@ -19,13 +19,11 @@ mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v2")
 
 
-# --- 2. CLASSES & HELPERS ---
+# --- 2. HELPERS ---
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, weight=None, reduction='mean'):
         super().__init__()
-        self.gamma = gamma
-        self.weight = weight
-        self.reduction = reduction
+        self.gamma, self.weight, self.reduction = gamma, weight, reduction
         self.ce = nn.CrossEntropyLoss(weight=weight, reduction='none')
 
     def forward(self, input, target):
@@ -41,26 +39,20 @@ def start_mlflow_run(run_name): return mlflow.start_run(run_name=run_name)
 def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
                         train_size, val_size, test_size, device, lr, weight_decay, class_weights=None):
     params = {
-        "version": "v2_Focal_Sampler",
-        "model": "tf_efficientnet_b3.ns_jft_in1k",
-        "mode": mode,
-        "image_size": image_size,
-        "batch_size": batch_size,
-        "epochs": epochs,
-        "optimizer": "AdamW",
-        "lr": lr,
-        "device": str(device),
-        "loss_function": "FocalLoss",
-        "sampler": "WeightedRandomSampler",
-        "training_type": "GPU" if torch.cuda.is_available() else "CPU"
+        "version": "v2_Focal_Sampler", "model": "tf_efficientnet_b3.ns_jft_in1k", "mode": mode,
+        "image_size": image_size, "batch_size": batch_size, "epochs": epochs,
+        "optimizer": "AdamW", "lr": lr, "device": str(device),
+        "loss_function": "FocalLoss", "sampler": "WeightedRandomSampler"
     }
     if class_weights is not None:
         params.update({"cw_benign": float(class_weights[0]), "cw_malignant": float(class_weights[1])})
     mlflow.log_params(params)
 
 
-def log_metrics(prefix, metrics, step=None):
-    mlflow.log_metrics(metrics, step=step)
+def log_epoch_metrics(epoch, train_loss, val_loss, val_f1, current_lr, detailed_metrics=None):
+    metrics = {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1, "lr": current_lr}
+    if detailed_metrics: metrics.update(detailed_metrics)
+    mlflow.log_metrics(metrics, step=epoch)
 
 
 def calculate_metrics(y_true, y_pred, prefix="val"):
@@ -68,7 +60,6 @@ def calculate_metrics(y_true, y_pred, prefix="val"):
         f"{prefix}_f1_macro": f1_score(y_true, y_pred, average='macro', zero_division=0),
         f"{prefix}_f1_malignant": f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_recall_malignant": recall_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
-        f"{prefix}_precision_malignant": precision_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_accuracy": accuracy_score(y_true, y_pred)
     }
 
@@ -112,18 +103,17 @@ def validate(model, loader, criterion, show_report=False):
 
 
 # --- 4. MAIN TRAIN ---
-def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Device: {device} | Version: v2 (Focal + Sampler)")
 
     # A. Load Data
     CSV_DIR = 'dataset_splits'
-    paths = {'raw': ('raw_train.csv', 'raw_val.csv', 'raw_test.csv'),
-             'clean': ('clean_train.csv', 'clean_val.csv', 'clean_test.csv')}
-    if mode not in paths: raise ValueError(f"❌ Invalid mode: {mode}")
-
-    train_path, val_path, test_path = [os.path.join(CSV_DIR, p) for p in paths[mode]]
+    prefix = "processed" if mode == 'processed' else "raw"
+    train_path = os.path.join(CSV_DIR, f'{prefix}_train.csv')
+    val_path = os.path.join(CSV_DIR, f'{prefix}_val.csv')
+    test_path = os.path.join(CSV_DIR, f'{prefix}_test.csv')
     for p in [train_path, val_path, test_path]:
         if not os.path.exists(p): raise FileNotFoundError(f"❌ Missing: {p}")
 
@@ -132,30 +122,41 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
 
     # B. Sampler & Weights
     y_train = train_df['malignant'].values.astype(int)
-    class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
-    print(f"⚖️ Class Weights: {class_weights}")
+    unique_classes = np.unique(y_train)
+    sampler = None
+    class_weights_tensor = None
+    class_weights = None
 
-    class_counts = np.bincount(y_train)
-    sample_weights = 1. / class_counts[y_train]
-    sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
-    print("✅ WeightedRandomSampler activated.")
+    if len(unique_classes) < 2:
+        print("⚠️ Only 1 class. Using Default Weights.")
+        class_weights_tensor = None
+    else:
+        class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+        print(f"⚖️ Class Weights: {class_weights}")
+        class_weights_tensor = torch.FloatTensor(class_weights).to(device)
 
-    # C. DataLoaders (Shuffle=False when Sampler is used)
+        class_sample_count = np.array([len(np.where(y_train == t)[0]) for t in unique_classes])
+        weight_per_class = 1. / class_sample_count
+        samples_weight = np.array([weight_per_class[t] for t in y_train])
+        sampler = WeightedRandomSampler(torch.DoubleTensor(samples_weight), len(samples_weight), replacement=True)
+        print("✅ WeightedRandomSampler activated.")
+
+    # C. DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, sampler=sampler,
-                              num_workers=8, pin_memory=True)
+                              shuffle=(sampler is None), num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                             num_workers=8, pin_memory=True)
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # D. Model Setup
+    # D. Model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
-    criterion = FocalLoss(gamma=2.0, weight=torch.FloatTensor(class_weights).to(device))
+    criterion = FocalLoss(gamma=2.0, weight=class_weights_tensor)
     scaler = GradScaler()
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # E. Train Loop
+    # E. Run
     start_mlflow_run(f"EffB3_{mode}_v2")
     log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
                         base_lr, 0.01, class_weights)
@@ -168,22 +169,16 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
         for epoch in range(epochs):
             lr = optimizer.param_groups[0]['lr']
             print(f"🚀 Epoch [{epoch + 1}/{epochs}] | LR: {lr:.6f}")
-            if epoch < warmup_epochs:
-                for g in optimizer.param_groups: g['lr'] = base_lr * (epoch + 1) / warmup_epochs
-            else:
-                scheduler.step(epoch - warmup_epochs)
+            scheduler.step()
 
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
             val_loss, val_labels, val_preds = validate(model, val_loader, criterion)
 
             metrics = calculate_metrics(val_labels, val_preds, prefix="val")
-            # Logging metrics including F1 Malignant (Critical for v2)
-            log_metrics("val", {**metrics, "train_loss": train_loss, "val_loss": val_loss}, step=epoch)
+            log_epoch_metrics(epoch, train_loss, val_loss, metrics['val_f1_macro'], lr, metrics)
+            print(f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Mal: {metrics['val_f1_malignant']:.4f}")
 
-            print(
-                f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Macro: {metrics['val_f1_macro']:.4f} | F1 Mal: {metrics['val_f1_malignant']:.4f}")
-
-            # Early stopping based on F1 Malignant (better for imbalance)
+            # v2: Early stopping on Malignant F1
             if metrics['val_f1_malignant'] > best_f1 * 1.005:
                 best_f1, patience = metrics['val_f1_malignant'], 0
                 torch.save(model.state_dict(), model_path)
@@ -196,8 +191,7 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
         model.load_state_dict(torch.load(model_path))
         test_loss, test_labels, test_preds = validate(model, test_loader, criterion, show_report=True)
         test_metrics = calculate_metrics(test_labels, test_preds, prefix="test")
-        log_metrics("test", {**test_metrics, "test_loss": test_loss})
+        mlflow.log_metrics({**test_metrics, "test_loss": test_loss})
 
     finally:
         mlflow.end_run()
-        print("🔚 Done v2.")

@@ -14,7 +14,7 @@ from scripts.ISICDataset import ISICDataset
 
 # --- 1. CONFIGURATION ---
 os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
-os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"  # LƯU Ý: Nên dùng biến môi trường
+os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v1")
 
@@ -33,14 +33,9 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
         "mode": mode,
         "image_size": image_size,
         "batch_size": batch_size,
-        "max_epochs": epochs,
+        "epochs": epochs,
         "optimizer": "AdamW",
-        "learning_rate": lr,
-        "weight_decay": weight_decay,
-        "early_stop_patience": early_stop_patience,
-        "train_size": train_size,
-        "val_size": val_size,
-        "test_size": test_size,
+        "lr": lr,
         "device": str(device),
         "loss_function": "CrossEntropyLoss",
         "sampler": "None (Shuffle=True)",
@@ -48,27 +43,19 @@ def log_training_params(mode, image_size, batch_size, epochs, early_stop_patienc
     }
     if class_weights is not None:
         params["class_weight_benign"] = float(class_weights[0])
-        if len(class_weights) > 1:
-            params["class_weight_malignant"] = float(class_weights[1])
+        if len(class_weights) > 1: params["class_weight_malignant"] = float(class_weights[1])
     mlflow.log_params(params)
 
 
 def log_epoch_metrics(epoch, train_loss, val_loss, val_f1, current_lr, detailed_metrics=None):
-    metrics = {
-        "train_loss": train_loss,
-        "val_loss": val_loss,
-        "val_f1_macro": val_f1,
-        "learning_rate": current_lr,
-    }
-    if detailed_metrics:
-        metrics.update(detailed_metrics)
+    metrics = {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1, "lr": current_lr}
+    if detailed_metrics: metrics.update(detailed_metrics)
     mlflow.log_metrics(metrics, step=epoch)
 
 
 def log_test_metrics(test_loss, test_f1, detailed_metrics=None):
     metrics = {"test_loss": test_loss, "test_f1_macro": test_f1}
-    if detailed_metrics:
-        metrics.update(detailed_metrics)
+    if detailed_metrics: metrics.update(detailed_metrics)
     mlflow.log_metrics(metrics)
 
 
@@ -77,7 +64,6 @@ def calculate_metrics(y_true, y_pred, prefix="val"):
         f"{prefix}_f1_macro": f1_score(y_true, y_pred, average='macro', zero_division=0),
         f"{prefix}_f1_malignant": f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_recall_malignant": recall_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
-        f"{prefix}_precision_malignant": precision_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_accuracy": accuracy_score(y_true, y_pred)
     }
 
@@ -85,8 +71,7 @@ def calculate_metrics(y_true, y_pred, prefix="val"):
 # --- 3. LOOPS ---
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
     model.train()
-    total_loss = 0.0
-    count = 0
+    total_loss, count = 0.0, 0
     for imgs, labels in loader:
         imgs, labels = imgs.cuda(non_blocking=True), labels.cuda(non_blocking=True)
         optimizer.zero_grad()
@@ -98,7 +83,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
         scaler.step(optimizer)
         scaler.update()
-        total_loss += loss.item()
+        total_loss += loss.item();
         count += 1
     return total_loss / max(1, count)
 
@@ -113,39 +98,36 @@ def validate(model, loader, criterion, show_report=False):
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-            preds = outputs.argmax(1)
-            all_preds.extend(preds.cpu().tolist())
+            all_preds.extend(outputs.argmax(1).cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
-    avg_loss = total_loss / max(1, len(loader))
     if show_report:
         print(classification_report(all_labels, all_preds, target_names=['Benign', 'Malignant'], digits=4,
                                     zero_division=0))
-    return avg_loss, np.array(all_labels), np.array(all_preds)
+    return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_preds)
 
 
 # --- 4. MAIN TRAIN ---
-def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Device: {device} | Version: v1 (Baseline)")
 
-    # A. Load Data
+    # A. Load Data (Updated paths for new ReadData)
     CSV_DIR = 'dataset_splits'
-    paths = {
-        'raw': ('raw_train.csv', 'raw_val.csv', 'raw_test.csv'),
-        'clean': ('clean_train.csv', 'clean_val.csv', 'clean_test.csv')
-    }
-    if mode not in paths: raise ValueError(f"❌ Invalid mode: {mode}")
+    prefix = "processed" if mode == 'processed' else "raw"
 
-    train_path, val_path, test_path = [os.path.join(CSV_DIR, p) for p in paths[mode]]
+    train_path = os.path.join(CSV_DIR, f'{prefix}_train.csv')
+    val_path = os.path.join(CSV_DIR, f'{prefix}_val.csv')
+    test_path = os.path.join(CSV_DIR, f'{prefix}_test.csv')
+
     for p in [train_path, val_path, test_path]:
         if not os.path.exists(p): raise FileNotFoundError(f"❌ Missing: {p}")
 
-    print(f"📂 Loading Data...")
+    print(f"📂 Loading Data ({mode})...")
     train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
     print(f"📊 Stats: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-    # B. DataLoaders (Shuffle=True for v1)
+    # B. DataLoaders (Shuffle=True)
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
                               num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -153,20 +135,23 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # C. Model & Weights
+    # C. Model & Optim
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
 
+    # Class Weights
     y_train = train_df['malignant'].values
-    class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+    if len(np.unique(y_train)) < 2:
+        class_weights = np.array([1.0, 1.0])
+    else:
+        class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     print(f"⚖️ Class Weights: {class_weights}")
 
-    # v1 uses CrossEntropyLoss
     criterion = nn.CrossEntropyLoss(weight=torch.FloatTensor(class_weights).to(device))
     scaler = GradScaler()
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # D. Training Loop
+    # D. Loop
     mlflow_run = start_mlflow_run(f"EffB3_{mode}_v1")
     log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
                         base_lr, 0.01, class_weights)
@@ -179,20 +164,14 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
         for epoch in range(epochs):
             lr = optimizer.param_groups[0]['lr']
             print(f"🚀 Epoch [{epoch + 1}/{epochs}] | LR: {lr:.6f}")
-
-            if epoch < warmup_epochs:  # Warmup
-                for g in optimizer.param_groups: g['lr'] = base_lr * (epoch + 1) / warmup_epochs
-            else:
-                scheduler.step(epoch - warmup_epochs)
+            scheduler.step()
 
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
             val_loss, val_labels, val_preds = validate(model, val_loader, criterion)
 
             metrics = calculate_metrics(val_labels, val_preds, prefix="val")
             log_epoch_metrics(epoch, train_loss, val_loss, metrics['val_f1_macro'], lr, metrics)
-
-            print(
-                f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Macro: {metrics['val_f1_macro']:.4f} | Best: {best_f1:.4f}")
+            print(f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Macro: {metrics['val_f1_macro']:.4f}")
 
             if metrics['val_f1_macro'] > best_f1 * 1.005:
                 best_f1, patience = metrics['val_f1_macro'], 0
@@ -210,4 +189,3 @@ def train(mode='clean', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, 
 
     finally:
         mlflow.end_run()
-        print("🔚 Done v1.")
