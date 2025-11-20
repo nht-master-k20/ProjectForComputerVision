@@ -15,10 +15,10 @@ class ReadData:
     IMAGES_DIR = 'dataset/ISIC_2024_Training_Input'
     AUG_IMAGES_DIR = 'dataset/ISIC_2024_Training_Input_Augmented'
     CLASS_MAP = {0: 'Lành tính', 1: 'Ác tính'}
+    CLEAN_DATA_ROOT = 'dataset/data_clean'
+
     CSV_OUTPUT_DIR = 'dataset_splits'
     CSV_OUTPUT_DIR_AUG = 'dataset_splits_aug'
-
-    CLEAN_DATA_ROOT = 'dataset/data_clean'
     CSV_OUTPUT_DIR_CLEAN = 'dataset_splits_clean'
     CSV_OUTPUT_DIR_AUG_CLEAN = 'dataset_splits_aug_clean'
 
@@ -288,7 +288,7 @@ class ReadData:
         return df_clean
 
     @classmethod
-    def run(cls, mode, clean=True):
+    def run(cls, mode):
         if mode in ['raw', 'augment']:
             full_df = cls.load_isic_metadata()
 
@@ -333,8 +333,8 @@ class ReadData:
                 clean_val_csv_path = os.path.join(csv_dir_clean, 'clean_val.csv')
                 clean_test_csv_path = os.path.join(csv_dir_clean, 'clean_test.csv')
                 final_train_df_clean.to_csv(clean_train_csv_path, index=False)
-                val_df.to_csv(clean_val_csv_path, index=False)
-                test_df.to_csv(clean_test_csv_path, index=False)
+                val_df_clean.to_csv(clean_val_csv_path, index=False)
+                test_df_clean.to_csv(clean_test_csv_path, index=False)
                 return True
         print(f'ReadData with mode = {mode} is not support.')
         return False
