@@ -12,12 +12,13 @@ import os
 import mlflow
 import mlflow.pytorch
 import torch.distributed as dist
+from torch.utils.data import WeightedRandomSampler
 
 # MLflow setup
 os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
 mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3")
+mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v2")
 
 def start_mlflow_run(run_name, mode, image_size):
     run_name = run_name or f"EfficientNetB3_{mode}_{image_size}"
@@ -170,6 +171,25 @@ def validate(model, loader, criterion, show_report=False, ddp=False):
                                         target_names=['Benign (0)', 'Malignant (1)'], digits=4, zero_division=0))
     return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, weight=None, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+        self.reduction = reduction
+        self.ce = nn.CrossEntropyLoss(weight=weight, reduction='none')
+
+    def forward(self, input, target):
+        logpt = -self.ce(input, target)
+        pt = torch.exp(logpt)
+        loss = ((1 - pt) ** self.gamma) * (-logpt)
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
 def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -186,8 +206,22 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
 
     train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
 
+    # ---------- CLASS WEIGHTS & SAMPLER ----------
+    labels = train_df['malignant'].values.astype(int)
+    class_sample_count = np.array([len(np.where(labels==t)[0]) for t in np.unique(labels)])
+    weight_per_class = 1. / class_sample_count
+    sample_weights = np.array([weight_per_class[t] for t in labels])
+    sample_weights = torch.FloatTensor(sample_weights)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+
     # DataLoaders
-    train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    train_loader = DataLoader(
+        ISICDataset(train_df, img_size=image_size),
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=8,
+        pin_memory=True
+    )
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
@@ -199,7 +233,7 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     class_weights = torch.FloatTensor(
         compute_class_weight('balanced', classes=np.array([0, 1]), y=train_df['malignant'].values)
     ).to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = FocalLoss(gamma=2.0, weight=class_weights)
     scaler = GradScaler()
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6
@@ -207,7 +241,7 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
 
     # MLflow run
     if is_main_process():
-        run_name = f"EfficientNetB3_{mode}"
+        run_name = f"EfficientNetB3_{mode}_focal"
         mlflow_run = start_mlflow_run(run_name, mode, image_size)
         log_training_params(
             mode, image_size, batch_size, epochs, early_stop_patience=5,
@@ -221,16 +255,14 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     patience_counter = 0
     delta = 0.005
     gradient_clip = 1.0
-    model_path = f"checkpoints/best_efficientnet_b3_{mode}.pth"
+    model_path = f"checkpoints/best_efficientnet_b3_{mode}_focal.pth"
     os.makedirs("checkpoints", exist_ok=True)
 
     try:
-        # Training loop
         for epoch in range(epochs):
             current_lr = optimizer.param_groups[0]['lr']
-            print(f"🚀 Starting Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
+            print(f"🚀 Epoch [{epoch+1}/{epochs}] | LR: {current_lr:.6f}")
 
-            # Warmup LR
             if epoch < warmup_epochs:
                 warmup_lr = base_lr * (epoch + 1) / warmup_epochs
                 for g in optimizer.param_groups:
@@ -239,78 +271,74 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
                 cosine_scheduler.step(epoch - warmup_epochs)
 
             # Train
-            train_loss = train_one_epoch(
-                model, train_loader, optimizer, criterion, scaler, gradient_clip
-            )
+            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip)
 
             # Validate
-            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
-                model, val_loader, criterion, show_report=False
-            )
+            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion, show_report=False)
+
+            # Log metrics class-wise
+            all_preds = []
+            all_labels = []
+            model.eval()
+            with torch.no_grad():
+                for imgs, labels_batch in val_loader:
+                    imgs, labels_batch = imgs.cuda(non_blocking=True), labels_batch.cuda(non_blocking=True)
+                    outputs = model(imgs)
+                    preds = outputs.argmax(1)
+                    all_preds.extend(preds.cpu().tolist())
+                    all_labels.extend(labels_batch.cpu().tolist())
+            f1_benign = f1_score(all_labels, all_preds, labels=[0], average='binary')
+            f1_malignant = f1_score(all_labels, all_preds, labels=[1], average='binary')
+            recall_benign = recall_score(all_labels, all_preds, labels=[0], average='binary')
+            recall_malignant = recall_score(all_labels, all_preds, labels=[1], average='binary')
+            precision_benign = precision_score(all_labels, all_preds, labels=[0], average='binary')
+            precision_malignant = precision_score(all_labels, all_preds, labels=[1], average='binary')
 
             if is_main_process():
-                log_epoch_metrics(
-                    epoch, train_loss, val_loss, val_acc,
-                    val_precision, val_recall, val_f1, current_lr
-                )
+                mlflow.log_metrics({
+                    "val_f1_benign": f1_benign,
+                    "val_f1_malignant": f1_malignant,
+                    "val_recall_benign": recall_benign,
+                    "val_recall_malignant": recall_malignant,
+                    "val_precision_benign": precision_benign,
+                    "val_precision_malignant": precision_malignant,
+                }, step=epoch)
+
+                log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr)
 
                 print(
-                    f"✅ Finished Epoch [{epoch + 1}/{epochs}] | "
-                    f"LR: {current_lr:.6f} | "
-                    f"Train Loss: {train_loss:.4f} | "
-                    f"Val Loss: {val_loss:.4f} | "
-                    f"Val Acc: {val_acc:.4f} | "
-                    f"Val Precision: {val_precision:.4f} | "
-                    f"Val Recall: {val_recall:.4f} | "
-                    f"Val F1: {val_f1:.4f} | "
-                    f"Best Val F1: {best_f1:.4f} | "
-                    f"Patience: {patience_counter}/5"
+                    f"✅ Epoch [{epoch+1}] | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | "
+                    f"F1 Benign: {f1_benign:.4f} | F1 Malignant: {f1_malignant:.4f} | Best F1: {best_f1:.4f}"
                 )
 
                 # Early stopping
                 if val_f1 > best_f1 * (1 + delta):
                     best_f1 = val_f1
                     patience_counter = 0
-
-                    torch.save(
-                        {
-                            'epoch': epoch + 1,
-                            'model_state_dict': model.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'best_f1': best_f1
-                        },
-                        model_path
-                    )
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'best_f1': best_f1
+                    }, model_path)
                     log_model_artifact(model_path)
                 else:
                     patience_counter += 1
 
                 if patience_counter >= 5:
                     print("Early stopping triggered")
-                    mlflow.log_param("actual_epochs", epoch + 1)
+                    mlflow.log_param("actual_epochs", epoch+1)
                     break
 
-        # Test set evaluation
+        # Test evaluation
         if is_main_process():
             checkpoint = torch.load(model_path, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
-
-            test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
-                model, test_loader, criterion, show_report=True
-            )
-
-            log_test_metrics(
-                test_loss, test_acc, test_precision, test_recall, test_f1, best_f1
-            )
-
-    except Exception as e:
-        if is_main_process():
-            print("❌ ERROR during training:", str(e))
-            mlflow.log_param("run_failed", True)
-            mlflow.log_param("error_message", str(e))
-        raise e
+            test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion, show_report=True)
+            log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
 
     finally:
         if is_main_process():
             print("🔚 MLflow run closed.")
             mlflow.end_run()
+
