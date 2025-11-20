@@ -64,19 +64,20 @@ class ReadData:
 
     @staticmethod
     def _process_worker(row_tuple, output_dir):
-        """Hàm chạy song song: Đọc -> Xóa lông -> Lưu"""
+        """Hàm chạy song song: Đọc -> Resize -> Xóa lông -> Lưu"""
         idx, row = row_tuple
         src_path = row['image_path']
         fname = os.path.basename(src_path)
         dst_path = os.path.join(output_dir, fname)
 
+        # Nếu ảnh đã tồn tại thì bỏ qua (Resume)
         if os.path.exists(dst_path): return dst_path
 
         try:
             img = cv2.imread(src_path)
             if img is not None:
-                # Resize nhẹ về 300x300 để chuẩn hóa đầu vào (tùy chọn)
-                # img = cv2.resize(img, (300, 300))
+                # [TỐI ƯU] Resize về 300x300 để tiết kiệm ổ cứng và tăng tốc train
+                img = cv2.resize(img, (300, 300))
                 clean = ReadData.remove_hair(img)
                 cv2.imwrite(dst_path, clean)
                 return dst_path
@@ -92,6 +93,7 @@ class ReadData:
 
         print(f"🧹 Đang làm sạch {len(df)} ảnh vào '{folder_name}'...")
 
+        # Tự động dùng tối đa số nhân CPU
         with ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
             func = functools.partial(cls._process_worker, output_dir=save_dir)
             # Chạy map và lấy kết quả đường dẫn mới
@@ -108,7 +110,7 @@ class ReadData:
         aug_dir = os.path.join(cls.OUTPUT_IMG_DIR, 'Augmented_Train')
         os.makedirs(aug_dir, exist_ok=True)
 
-        # Pipeline biến đổi mạnh
+        # Pipeline biến đổi mạnh cho lớp ác tính
         pipeline = albumentations.Compose([
             albumentations.Resize(300, 300),
             albumentations.HorizontalFlip(p=0.5),
@@ -159,7 +161,7 @@ class ReadData:
     @classmethod
     def run(cls):
         """Hàm chạy duy nhất: Split -> Clean -> Augment -> Save"""
-        print("🚀 Bắt đầu quy trình xử lý dữ liệu...")
+        print("🚀 Bắt đầu quy trình xử lý dữ liệu (Clean > Augment)...")
 
         # 1. Load
         df = cls.load_metadata()
@@ -180,7 +182,7 @@ class ReadData:
         os.makedirs(cls.CSV_OUTPUT_DIR, exist_ok=True)
         print(f"💾 Đang lưu CSV vào {cls.CSV_OUTPUT_DIR}...")
 
-        # Đặt tên thống nhất là processed_train.csv
+        # Tên file chuẩn để khớp với các file train v1, v2, v3
         train.to_csv(f'{cls.CSV_OUTPUT_DIR}/processed_train.csv', index=False)
         val.to_csv(f'{cls.CSV_OUTPUT_DIR}/processed_val.csv', index=False)
         test.to_csv(f'{cls.CSV_OUTPUT_DIR}/processed_test.csv', index=False)
