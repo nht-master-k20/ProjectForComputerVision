@@ -1,5 +1,7 @@
 dataset/ISIC_2024_Training_Input/
-dataset/ISIC_2024_Training_Input_Augmented
+dataset/ISIC_2024_Clean_Input/
+dataset/ISIC_2024_Training_Input_Augmented/
+dataset/data_clean/
 dataset.zip
 scripts/__pycache__/
 cv/

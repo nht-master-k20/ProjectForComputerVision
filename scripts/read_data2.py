@@ -56,10 +56,13 @@ class ReadData:
         # Giữ nguyên logic xóa lông
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
             blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
-            _, thresh = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
-            return cv2.inpaint(image, thresh, 3, cv2.INPAINT_TELEA)
+            blackhat = cv2.GaussianBlur(blackhat, (5, 5), 0)
+            _, thresh = cv2.threshold(blackhat, 15, 255, cv2.THRESH_BINARY)
+            thresh = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=1)
+            inpainted = cv2.inpaint(image, thresh, 3, cv2.INPAINT_TELEA)
+            return inpainted
         except:
             return image
 
