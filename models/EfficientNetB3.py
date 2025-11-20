@@ -183,20 +183,20 @@ def validate(model, loader, criterion, show_report=False, ddp=False):
     return avg_loss, accuracy, macro_precision, macro_recall, macro_f1
 
 
-def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
+def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, warmup_epochs=2):
     """
     Hàm train chính với 3 chế độ bắt buộc:
     - mode='raw': Dữ liệu gốc, chưa xử lý.
-    - mode='clean': Dữ liệu đã xóa lông (nhưng chưa cân bằng/augment).
-    - mode='augment': Dữ liệu đã xóa lông VÀ cân bằng (sinh thêm ảnh).
+    - mode='clean': Dữ liệu đã xóa lông.
+    - mode='augment': Dữ liệu đã xóa lông VÀ cân bằng.
     """
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- CẤU HÌNH ĐƯỜNG DẪN CSV ---
-    # Tất cả file CSV đều nằm trong thư mục này (do class ReadData sinh ra)
     CSV_DIR = 'dataset_splits'
 
+    # 👇 SỬA LỖI: Thêm lại block augment bị thiếu
     if mode == 'raw':
         print("📢 Chế độ: RAW (Dữ liệu gốc)")
         train_path = os.path.join(CSV_DIR, 'raw_train.csv')
@@ -216,7 +216,7 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     for name, path in [('Train', train_path), ('Val', val_path), ('Test', test_path)]:
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"❌ Không tìm thấy file {name}: {path}.\n👉 Hãy chạy ReadData.run(mode='{mode if mode != 'clean' else 'raw'}', clean=True) trước.")
+                f"❌ Không tìm thấy file {name}: {path}.\n👉 Hãy chạy ReadData.run() trước.")
 
     print(f"📂 Loading Data from:\n - Train: {train_path}\n - Val:   {val_path}\n - Test:  {test_path}")
 
@@ -225,16 +225,26 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
 
-    print(f"\n⚠️ WARNING: Đang chạy chế độ DEBUG với {500} mẫu mỗi tập!")
-    # Cắt tập Train: Dùng train_test_split để lấy 500 mẫu và đảm bảo chia đều class (stratify)
-    from sklearn.model_selection import train_test_split
-    if len(train_df) > 500:
-        train_df, _ = train_test_split(
-            train_df,
-            train_size=500,
-            stratify=train_df['malignant'],  # Quan trọng: Đảm bảo đủ 2 class
-            random_state=42
-        )
+    # -----------------------------------------------------------
+    # 👇 XỬ LÝ DEBUG SAMPLING (AN TOÀN)
+    # -----------------------------------------------------------
+    debug_size = 500
+    print(f"\n⚠️ WARNING: Đang chạy chế độ DEBUG với {debug_size} mẫu!")
+
+    # 1. Cắt tập Train: Cố gắng Stratify, nếu lỗi (do class quá ít) thì lấy random
+    if len(train_df) > debug_size:
+        try:
+            from sklearn.model_selection import train_test_split
+            train_df, _ = train_test_split(
+                train_df,
+                train_size=debug_size,
+                stratify=train_df['malignant'],  # Cố gắng chia đều tỉ lệ Benign/Malignant
+                random_state=42
+            )
+        except ValueError:
+            print("⚠️ Không thể Stratify (lớp thiểu số quá ít), chuyển sang Random Sampling.")
+            train_df = train_df.sample(n=debug_size, random_state=42)
+    # -----------------------------------------------------------
 
     # DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
@@ -246,19 +256,26 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
 
     # Model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
-
-    # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
 
-    # Class Weights: Tính toán tự động dựa trên dữ liệu Train load được
-    # - Raw/Clean: Thường mất cân bằng -> Trọng số sẽ cao cho lớp Ác tính.
-    # - Augment: Đã cân bằng -> Trọng số xấp xỉ 1:1.
+    # -----------------------------------------------------------
+    # 👇 TÍNH CLASS WEIGHTS (AN TOÀN TUYỆT ĐỐI)
+    # Ngăn chặn lỗi IndexError nếu mẫu debug xui xẻo chỉ có 1 class
+    # -----------------------------------------------------------
     y_train = train_df['malignant'].values
-    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
-    class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+    unique_classes = np.unique(y_train)
+
+    if len(unique_classes) < 2:
+        print(f"⚠️ CẢNH BÁO: Mẫu debug chỉ chứa 1 lớp ({unique_classes}). Gán trọng số mặc định [1.0, 1.0].")
+        class_weights = np.array([1.0, 1.0])  # Fallback an toàn
+    else:
+        class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0, 1]), y=y_train)
+
     print(f"⚖️ Class Weights: {class_weights}")
 
+    class_weights_tensor = torch.FloatTensor(class_weights).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+
     scaler = GradScaler()
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6
@@ -266,7 +283,7 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
 
     # MLflow Run
     if is_main_process():
-        run_name = f"EfficientNetB3_{mode}_v3"
+        run_name = f"EfficientNetB3_{mode}_v3_DEBUG"
         mlflow_run = start_mlflow_run(run_name)
         log_training_params(
             mode, image_size, batch_size, epochs, early_stop_patience=5,
@@ -292,7 +309,6 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
             current_lr = optimizer.param_groups[0]['lr']
             print(f"🚀 Starting Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
 
-            # Warmup
             if epoch < warmup_epochs:
                 warmup_lr = base_lr * (epoch + 1) / warmup_epochs
                 for g in optimizer.param_groups:
@@ -300,12 +316,10 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
             else:
                 cosine_scheduler.step(epoch - warmup_epochs)
 
-            # Train Step
             train_loss = train_one_epoch(
                 model, train_loader, optimizer, criterion, scaler, gradient_clip
             )
 
-            # Validation Step
             val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
                 model, val_loader, criterion, show_report=False
             )
@@ -325,7 +339,6 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
                     f"Patience: {patience_counter}/5"
                 )
 
-                # Early Stopping & Save Best Model
                 if val_f1 > best_f1 * (1 + delta):
                     best_f1 = val_f1
                     patience_counter = 0
@@ -344,16 +357,13 @@ def train(mode='augment', image_size=300, batch_size=32, epochs=10, base_lr=1e-3
                     mlflow.log_param("actual_epochs", epoch + 1)
                     break
 
-        # Final Evaluation on Test Set
         if is_main_process():
             print(f"\n🧪 Evaluating on Test Set (Mode: {mode})...")
             checkpoint = torch.load(model_path, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
-
             test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
                 model, test_loader, criterion, show_report=True
             )
-
             log_test_metrics(
                 test_loss, test_acc, test_precision, test_recall, test_f1, best_f1
             )
