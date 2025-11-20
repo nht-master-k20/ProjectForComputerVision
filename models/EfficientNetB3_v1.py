@@ -12,51 +12,40 @@ from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_sc
 from sklearn.utils.class_weight import compute_class_weight
 from scripts.ISICDataset import ISICDataset
 
-# --- 1. CONFIGURATION ---
-os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
-os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
-mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v1")
 
-
-# --- 2. HELPER FUNCTIONS ---
+# --- 1. HELPER FUNCTIONS ---
 def start_mlflow_run(run_name):
     return mlflow.start_run(run_name=run_name)
 
 
-def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
-                        train_size, val_size, test_size, device, lr, weight_decay,
-                        class_weights=None):
+def log_training_params(image_size, batch_size, epochs, train_len, val_len, test_len, device, lr, weight_decay,
+                        class_weights):
     params = {
         "version": "v1_Baseline",
         "model": "tf_efficientnet_b3.ns_jft_in1k",
-        "mode": mode,
         "image_size": image_size,
         "batch_size": batch_size,
         "epochs": epochs,
         "optimizer": "AdamW",
         "lr": lr,
+        "weight_decay": weight_decay,  # Đã thêm
+        "train_size": train_len,  # Đã thêm
+        "val_size": val_len,  # Đã thêm
+        "test_size": test_len,  # Đã thêm
         "device": str(device),
         "loss_function": "CrossEntropyLoss",
         "sampler": "None (Shuffle=True)",
         "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
     if class_weights is not None:
-        params["class_weight_benign"] = float(class_weights[0])
-        if len(class_weights) > 1: params["class_weight_malignant"] = float(class_weights[1])
+        params["cw_benign"] = float(class_weights[0])
+        if len(class_weights) > 1: params["cw_malignant"] = float(class_weights[1])
     mlflow.log_params(params)
 
 
-def log_epoch_metrics(epoch, train_loss, val_loss, val_f1, current_lr, detailed_metrics=None):
-    metrics = {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1, "lr": current_lr}
-    if detailed_metrics: metrics.update(detailed_metrics)
-    mlflow.log_metrics(metrics, step=epoch)
-
-
-def log_test_metrics(test_loss, test_f1, detailed_metrics=None):
-    metrics = {"test_loss": test_loss, "test_f1_macro": test_f1}
-    if detailed_metrics: metrics.update(detailed_metrics)
-    mlflow.log_metrics(metrics)
+def log_metrics(prefix, metrics, step=None):
+    log_data = {k: v for k, v in metrics.items()}
+    mlflow.log_metrics(log_data, step=step)
 
 
 def calculate_metrics(y_true, y_pred, prefix="val"):
@@ -64,11 +53,12 @@ def calculate_metrics(y_true, y_pred, prefix="val"):
         f"{prefix}_f1_macro": f1_score(y_true, y_pred, average='macro', zero_division=0),
         f"{prefix}_f1_malignant": f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_recall_malignant": recall_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
+        f"{prefix}_precision_malignant": precision_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_accuracy": accuracy_score(y_true, y_pred)
     }
 
 
-# --- 3. LOOPS ---
+# --- 2. TRAINING LOOPS ---
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
     model.train()
     total_loss, count = 0.0, 0
@@ -100,19 +90,28 @@ def validate(model, loader, criterion, show_report=False):
             total_loss += loss.item()
             all_preds.extend(outputs.argmax(1).cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
+
     if show_report:
         print(classification_report(all_labels, all_preds, target_names=['Benign', 'Malignant'], digits=4,
                                     zero_division=0))
+
     return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_preds)
 
 
-# --- 4. MAIN TRAIN ---
+# --- 3. MAIN FUNCTION ---
 def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
+    # A. Setup
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Device: {device} | Version: v1 (Baseline)")
 
-    # A. Load Data (Updated paths for new ReadData)
+    # MLflow Setup
+    os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
+    os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v1")
+
+    # B. Paths
     CSV_DIR = 'dataset_splits'
     prefix = "processed" if mode == 'processed' else "raw"
 
@@ -124,10 +123,12 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
         if not os.path.exists(p): raise FileNotFoundError(f"❌ Missing: {p}")
 
     print(f"📂 Loading Data ({mode})...")
-    train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
+    test_df = pd.read_csv(test_path)
     print(f"📊 Stats: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-    # B. DataLoaders (Shuffle=True)
+    # C. DataLoaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, shuffle=True,
                               num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -135,26 +136,25 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # C. Model & Optim
+    # D. Model & Optim
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
 
-    # Class Weights
     y_train = train_df['malignant'].values
     if len(np.unique(y_train)) < 2:
-        class_weights = np.array([1.0, 1.0])
+        cw = np.array([1.0, 1.0])
     else:
-        class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
-    print(f"⚖️ Class Weights: {class_weights}")
+        cw = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+    print(f"⚖️ Class Weights: {cw}")
 
-    criterion = nn.CrossEntropyLoss(weight=torch.FloatTensor(class_weights).to(device))
+    criterion = nn.CrossEntropyLoss(weight=torch.FloatTensor(cw).to(device))
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # D. Loop
+    # E. Loop
     mlflow_run = start_mlflow_run(f"EffB3_{mode}_v1")
-    log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
-                        base_lr, 0.01, class_weights)
+    log_training_params(image_size, batch_size, epochs, len(train_df), len(val_df), len(test_df), device, base_lr, 0.01,
+                        cw)
 
     best_f1, patience = -1, 0
     model_path = f"checkpoints/best_effb3_{mode}_v1.pth"
@@ -170,7 +170,8 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
             val_loss, val_labels, val_preds = validate(model, val_loader, criterion)
 
             metrics = calculate_metrics(val_labels, val_preds, prefix="val")
-            log_epoch_metrics(epoch, train_loss, val_loss, metrics['val_f1_macro'], lr, metrics)
+            log_metrics("val", {**metrics, "train_loss": train_loss, "val_loss": val_loss, "lr": lr}, step=epoch)
+
             print(f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Macro: {metrics['val_f1_macro']:.4f}")
 
             if metrics['val_f1_macro'] > best_f1 * 1.005:
@@ -185,7 +186,7 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
         model.load_state_dict(torch.load(model_path))
         test_loss, test_labels, test_preds = validate(model, test_loader, criterion, show_report=True)
         test_metrics = calculate_metrics(test_labels, test_preds, prefix="test")
-        log_test_metrics(test_loss, test_metrics['test_f1_macro'], test_metrics)
+        log_metrics("test", {**test_metrics, "test_loss": test_loss})
 
     finally:
         mlflow.end_run()

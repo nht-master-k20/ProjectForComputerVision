@@ -13,14 +13,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_sc
 from sklearn.utils.class_weight import compute_class_weight
 from scripts.ISICDataset import ISICDataset
 
-# --- 1. CONFIGURATION ---
-os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
-os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
-mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
 
-
-# --- 2. HELPERS ---
+# --- 1. CLASSES & HELPERS ---
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, weight=None, reduction='mean'):
         super().__init__()
@@ -37,23 +31,34 @@ class FocalLoss(nn.Module):
 def start_mlflow_run(run_name): return mlflow.start_run(run_name=run_name)
 
 
-def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
-                        train_size, val_size, test_size, device, lr, weight_decay, class_weights=None):
+def log_training_params(image_size, batch_size, epochs, train_len, val_len, test_len, device, lr, weight_decay,
+                        class_weights):
     params = {
-        "version": "v3_Bias_Threshold", "model": "tf_efficientnet_b3.ns_jft_in1k", "mode": mode,
-        "image_size": image_size, "batch_size": batch_size, "epochs": epochs,
-        "optimizer": "AdamW", "lr": lr, "device": str(device),
-        "loss_function": "FocalLoss", "sampler": "WeightedRandomSampler", "technique": "Bias+Threshold"
+        "version": "v3_Expert",
+        "model": "tf_efficientnet_b3.ns_jft_in1k",
+        "image_size": image_size,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "optimizer": "AdamW",
+        "lr": lr,
+        "weight_decay": weight_decay,  # Đã thêm
+        "train_size": train_len,  # Đã thêm
+        "val_size": val_len,  # Đã thêm
+        "test_size": test_len,  # Đã thêm
+        "device": str(device),
+        "loss_function": "FocalLoss",
+        "sampler": "WeightedRandomSampler",
+        "technique": "BiasInit + DynamicThreshold",
+        "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
     if class_weights is not None:
         params.update({"cw_benign": float(class_weights[0]), "cw_malignant": float(class_weights[1])})
     mlflow.log_params(params)
 
 
-def log_epoch_metrics(epoch, train_loss, val_loss, val_f1, current_lr, detailed_metrics=None):
-    metrics = {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1, "lr": current_lr}
-    if detailed_metrics: metrics.update(detailed_metrics)
-    mlflow.log_metrics(metrics, step=epoch)
+def log_metrics(prefix, metrics, step=None):
+    log_data = {k: v for k, v in metrics.items()}
+    mlflow.log_metrics(log_data, step=step)
 
 
 def find_best_threshold(y_true, y_probs):
@@ -71,12 +76,13 @@ def calculate_metrics(y_true, y_probs, threshold=0.5, prefix="val"):
         f"{prefix}_f1_macro": f1_score(y_true, y_pred, average='macro', zero_division=0),
         f"{prefix}_f1_malignant": f1_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_recall_malignant": recall_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
+        f"{prefix}_precision_malignant": precision_score(y_true, y_pred, labels=[1], average='binary', zero_division=0),
         f"{prefix}_threshold": threshold
     }
 
 
 def initialize_bias(model, device):
-    prior = 0.01
+    prior = 0.01  # Probability expectation
     bias_value = -np.log((1 - prior) / prior)
     if hasattr(model, 'classifier') and isinstance(model.classifier, nn.Linear):
         with torch.no_grad(): model.classifier.bias.data.fill_(bias_value)
@@ -85,7 +91,7 @@ def initialize_bias(model, device):
     return model
 
 
-# --- 3. LOOPS ---
+# --- 2. LOOPS ---
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
     model.train()
     total_loss, count = 0.0, 0
@@ -115,18 +121,25 @@ def validate(model, loader, criterion):
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-            # v3: Get PROBABILITIES
+            # v3: Return PROBABILITIES for dynamic threshold
             all_probs.extend(torch.softmax(outputs, dim=1)[:, 1].cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
     return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_probs)
 
 
-# --- 4. MAIN TRAIN ---
+# --- 3. MAIN FUNCTION ---
 def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🖥️ Device: {device} | Version: v3 (Bias + Dynamic Threshold)")
+    print(f"🖥️ Device: {device} | Version: v3 (Bias + Threshold)")
 
+    # A. MLflow Setup
+    os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
+    os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v3")
+
+    # B. Paths & Load Data
     CSV_DIR = 'dataset_splits'
     prefix = "processed" if mode == 'processed' else "raw"
 
@@ -140,28 +153,21 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
     train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
     print(f"📊 Stats: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-    # Sampler
+    # C. Sampler Setup
     y_train = train_df['malignant'].values.astype(int)
     unique_classes = np.unique(y_train)
-    sampler = None
-    class_weights_tensor = None
-    class_weights = None
 
     if len(unique_classes) < 2:
-        print("⚠️ Only 1 class. Defaulting.")
-        class_weights_tensor = None
+        sampler, cw = None, np.array([1.0, 1.0])
     else:
-        class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
-        print(f"⚖️ Class Weights: {class_weights}")
-        class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+        cw = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+        print(f"⚖️ Class Weights: {cw}")
+        class_counts = np.bincount(y_train)
+        sample_weights = 1. / class_counts[y_train]
+        sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
+        print("✅ WeightedRandomSampler Activated")
 
-        class_sample_count = np.array([len(np.where(y_train == t)[0]) for t in unique_classes])
-        weight_per_class = 1. / class_sample_count
-        samples_weight = np.array([weight_per_class[t] for t in y_train])
-        sampler = WeightedRandomSampler(torch.DoubleTensor(samples_weight), len(samples_weight), replacement=True)
-        print("✅ WeightedRandomSampler activated.")
-
-    # Loaders
+    # D. Loaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, sampler=sampler,
                               shuffle=(sampler is None), num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -169,22 +175,22 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # Model (Bias Init)
+    # E. Model (With Bias Init)
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2)
     model = initialize_bias(model, device)  # v3 specific
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
-    criterion = FocalLoss(gamma=2.0, weight=class_weights_tensor)
+    criterion = FocalLoss(gamma=2.0, weight=torch.FloatTensor(cw).to(device))
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # Run
-    start_mlflow_run(f"EffB3_{mode}_v3")
-    log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
-                        base_lr, 0.01, class_weights)
+    # F. Run
+    mlflow_run = start_mlflow_run(f"EffB3_{mode}_v3")
+    log_training_params(image_size, batch_size, epochs, len(train_df), len(val_df), len(test_df), device, base_lr, 0.01,
+                        cw)
 
     best_f1, patience, best_thresh_val = -1, 0, 0.5
-    model_path = f"checkpoints/best_effb3_{mode}_v3.pth"
+    model_path = f"checkpoints/best_effb3_v3.pth"
     os.makedirs("checkpoints", exist_ok=True)
 
     try:
@@ -196,18 +202,18 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
             train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
             val_loss, val_labels, val_probs = validate(model, val_loader, criterion)
 
-            # v3: Dynamic Threshold
+            # v3: Find Dynamic Threshold
             optimal_threshold, best_val_f1_mal = find_best_threshold(val_labels, val_probs)
             metrics = calculate_metrics(val_labels, val_probs, threshold=optimal_threshold, prefix="val")
 
-            log_epoch_metrics(epoch, train_loss, val_loss, metrics['val_f1_macro'], lr, metrics)
+            log_metrics("val", {**metrics, "train_loss": train_loss, "val_loss": val_loss, "lr": lr}, step=epoch)
             print(
                 f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Thresh: {optimal_threshold:.2f} | F1 Mal: {best_val_f1_mal:.4f}")
 
             if best_val_f1_mal > best_f1 * 1.005:
                 best_f1, best_thresh_val, patience = best_val_f1_mal, optimal_threshold, 0
                 torch.save({'state_dict': model.state_dict(), 'threshold': best_thresh_val}, model_path)
-                print(f"💾 Saved with thresh {best_thresh_val:.2f}: {model_path}")
+                print(f"💾 Saved (Thresh {best_thresh_val:.2f}): {model_path}")
             else:
                 patience += 1
                 if patience >= 5: print("🛑 Early Stopping"); break
@@ -222,7 +228,8 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
 
         print(classification_report(test_labels, (test_probs >= loaded_thresh).astype(int),
                                     target_names=['Benign', 'Malignant'], digits=4))
-        mlflow.log_metrics({**test_metrics, "test_loss": test_loss})
+        log_metrics("test", {**test_metrics, "test_loss": test_loss})
 
     finally:
         mlflow.end_run()
+        print("🔚 Done v3.")

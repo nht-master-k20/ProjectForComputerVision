@@ -12,14 +12,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_sc
 from sklearn.utils.class_weight import compute_class_weight
 from scripts.ISICDataset import ISICDataset
 
-# --- 1. CONFIGURATION ---
-os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
-os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
-mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v2")
 
-
-# --- 2. HELPERS ---
+# --- 1. HELPERS ---
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, weight=None, reduction='mean'):
         super().__init__()
@@ -36,23 +30,32 @@ class FocalLoss(nn.Module):
 def start_mlflow_run(run_name): return mlflow.start_run(run_name=run_name)
 
 
-def log_training_params(mode, image_size, batch_size, epochs, early_stop_patience,
-                        train_size, val_size, test_size, device, lr, weight_decay, class_weights=None):
+def log_training_params(image_size, batch_size, epochs, train_len, val_len, test_len, device, lr, weight_decay,
+                        class_weights):
     params = {
-        "version": "v2_Focal_Sampler", "model": "tf_efficientnet_b3.ns_jft_in1k", "mode": mode,
-        "image_size": image_size, "batch_size": batch_size, "epochs": epochs,
-        "optimizer": "AdamW", "lr": lr, "device": str(device),
-        "loss_function": "FocalLoss", "sampler": "WeightedRandomSampler"
+        "version": "v2_Focal_Sampler",
+        "model": "tf_efficientnet_b3.ns_jft_in1k",
+        "image_size": image_size,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "optimizer": "AdamW",
+        "lr": lr,
+        "weight_decay": weight_decay,  # Đã thêm
+        "train_size": train_len,  # Đã thêm
+        "val_size": val_len,  # Đã thêm
+        "test_size": test_len,  # Đã thêm
+        "device": str(device),
+        "loss_function": "FocalLoss",
+        "sampler": "WeightedRandomSampler",
+        "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
     if class_weights is not None:
         params.update({"cw_benign": float(class_weights[0]), "cw_malignant": float(class_weights[1])})
     mlflow.log_params(params)
 
 
-def log_epoch_metrics(epoch, train_loss, val_loss, val_f1, current_lr, detailed_metrics=None):
-    metrics = {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1, "lr": current_lr}
-    if detailed_metrics: metrics.update(detailed_metrics)
-    mlflow.log_metrics(metrics, step=epoch)
+def log_metrics(prefix, metrics, step=None):
+    mlflow.log_metrics({k: v for k, v in metrics.items()}, step=step)
 
 
 def calculate_metrics(y_true, y_pred, prefix="val"):
@@ -64,7 +67,7 @@ def calculate_metrics(y_true, y_pred, prefix="val"):
     }
 
 
-# --- 3. LOOPS ---
+# --- 2. LOOPS ---
 def train_one_epoch(model, loader, optimizer, criterion, scaler, gradient_clip=1.0):
     model.train()
     total_loss, count = 0.0, 0
@@ -102,13 +105,19 @@ def validate(model, loader, criterion, show_report=False):
     return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_preds)
 
 
-# --- 4. MAIN TRAIN ---
+# --- 3. MAIN TRAIN ---
 def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     torch.cuda.empty_cache()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Device: {device} | Version: v2 (Focal + Sampler)")
 
-    # A. Load Data
+    # A. MLflow Setup
+    os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
+    os.environ["DATABRICKS_TOKEN"] = "dapi987a9e46da628dbdb4a22949054afa24"
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/SkinDiseaseClassificationEFFB3_v2")
+
+    # B. Paths & Load Data
     CSV_DIR = 'dataset_splits'
     prefix = "processed" if mode == 'processed' else "raw"
     train_path = os.path.join(CSV_DIR, f'{prefix}_train.csv')
@@ -120,7 +129,7 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
     train_df, val_df, test_df = pd.read_csv(train_path), pd.read_csv(val_path), pd.read_csv(test_path)
     print(f"📊 Stats: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-    # B. Sampler & Weights
+    # C. Sampler
     y_train = train_df['malignant'].values.astype(int)
     unique_classes = np.unique(y_train)
     sampler = None
@@ -135,13 +144,12 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
         print(f"⚖️ Class Weights: {class_weights}")
         class_weights_tensor = torch.FloatTensor(class_weights).to(device)
 
-        class_sample_count = np.array([len(np.where(y_train == t)[0]) for t in unique_classes])
-        weight_per_class = 1. / class_sample_count
-        samples_weight = np.array([weight_per_class[t] for t in y_train])
-        sampler = WeightedRandomSampler(torch.DoubleTensor(samples_weight), len(samples_weight), replacement=True)
-        print("✅ WeightedRandomSampler activated.")
+        class_counts = np.bincount(y_train)
+        sample_weights = 1. / class_counts[y_train]
+        sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
+        print("✅ WeightedRandomSampler Activated")
 
-    # C. DataLoaders
+    # D. Loaders
     train_loader = DataLoader(ISICDataset(train_df, img_size=image_size), batch_size=batch_size, sampler=sampler,
                               shuffle=(sampler is None), num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, img_size=image_size), batch_size=batch_size, shuffle=False,
@@ -149,17 +157,17 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
     test_loader = DataLoader(ISICDataset(test_df, img_size=image_size), batch_size=batch_size, shuffle=False,
                              num_workers=8, pin_memory=True)
 
-    # D. Model
+    # E. Model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
     criterion = FocalLoss(gamma=2.0, weight=class_weights_tensor)
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # E. Run
+    # F. Train
     start_mlflow_run(f"EffB3_{mode}_v2")
-    log_training_params(mode, image_size, batch_size, epochs, 5, len(train_df), len(val_df), len(test_df), device,
-                        base_lr, 0.01, class_weights)
+    log_training_params(image_size, batch_size, epochs, len(train_df), len(val_df), len(test_df), device, base_lr, 0.01,
+                        class_weights)
 
     best_f1, patience = -1, 0
     model_path = f"checkpoints/best_effb3_{mode}_v2.pth"
@@ -175,10 +183,9 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
             val_loss, val_labels, val_preds = validate(model, val_loader, criterion)
 
             metrics = calculate_metrics(val_labels, val_preds, prefix="val")
-            log_epoch_metrics(epoch, train_loss, val_loss, metrics['val_f1_macro'], lr, metrics)
+            log_metrics("val", {**metrics, "train_loss": train_loss, "val_loss": val_loss, "lr": lr}, step=epoch)
             print(f"✅ Train: {train_loss:.4f} | Val Loss: {val_loss:.4f} | F1 Mal: {metrics['val_f1_malignant']:.4f}")
 
-            # v2: Early stopping on Malignant F1
             if metrics['val_f1_malignant'] > best_f1 * 1.005:
                 best_f1, patience = metrics['val_f1_malignant'], 0
                 torch.save(model.state_dict(), model_path)
@@ -191,7 +198,8 @@ def train(mode='processed', image_size=300, batch_size=32, epochs=10, base_lr=1e
         model.load_state_dict(torch.load(model_path))
         test_loss, test_labels, test_preds = validate(model, test_loader, criterion, show_report=True)
         test_metrics = calculate_metrics(test_labels, test_preds, prefix="test")
-        mlflow.log_metrics({**test_metrics, "test_loss": test_loss})
+        log_metrics("test", {**test_metrics, "test_loss": test_loss})
 
     finally:
         mlflow.end_run()
+        print("🔚 Done v2.")
