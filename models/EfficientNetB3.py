@@ -199,18 +199,24 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
 
     # Optimizer, criterion, scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
-    class_weights = torch.FloatTensor(compute_class_weight('balanced', classes=np.array([0, 1]), y=train_df['malignant'].values)).to(device)
+    class_weights = torch.FloatTensor(
+        compute_class_weight('balanced', classes=np.array([0, 1]), y=train_df['malignant'].values)
+    ).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     scaler = GradScaler()
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6
+    )
 
     # MLflow run
     if is_main_process():
         run_name = f"EfficientNetB3_{mode}"
         mlflow_run = start_mlflow_run(run_name, mode, image_size)
-        log_training_params(mode, image_size, batch_size, epochs, early_stop_patience=5,
-                            train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
-                            device=device, lr=base_lr, class_weights=class_weights)
+        log_training_params(
+            mode, image_size, batch_size, epochs, early_stop_patience=5,
+            train_size=len(train_df), val_size=len(val_df), test_size=len(test_df),
+            device=device, lr=base_lr, class_weights=class_weights
+        )
     else:
         mlflow_run = None
 
@@ -221,58 +227,93 @@ def train(mode='raw', image_size=300, batch_size=32, epochs=10, base_lr=1e-3, wa
     model_path = f"checkpoints/best_efficientnet_b3_{mode}.pth"
     os.makedirs("checkpoints", exist_ok=True)
 
-    # Training loop
-    for epoch in range(epochs):
-        # Warmup LR
-        if epoch < warmup_epochs:
-            warmup_lr = base_lr * (epoch + 1) / warmup_epochs
-            for g in optimizer.param_groups:
-                g['lr'] = warmup_lr
-        else:
-            cosine_scheduler.step(epoch - warmup_epochs)
+    try:
+        # Training loop
+        for epoch in range(epochs):
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"🚀 Starting Epoch [{epoch + 1}/{epochs}] | LR: {current_lr:.6f}")
 
-        current_lr = optimizer.param_groups[0]['lr']
+            # Warmup LR
+            if epoch < warmup_epochs:
+                warmup_lr = base_lr * (epoch + 1) / warmup_epochs
+                for g in optimizer.param_groups:
+                    g['lr'] = warmup_lr
+            else:
+                cosine_scheduler.step(epoch - warmup_epochs)
 
-        # Train
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, gradient_clip)
+            # Train
+            train_loss = train_one_epoch(
+                model, train_loader, optimizer, criterion, scaler, gradient_clip
+            )
 
-        # Validate
-        val_loss, val_acc, val_precision, val_recall, val_f1 = validate(model, val_loader, criterion, show_report=False)
+            # Validate
+            val_loss, val_acc, val_precision, val_recall, val_f1 = validate(
+                model, val_loader, criterion, show_report=False
+            )
 
-        if is_main_process():
-            log_epoch_metrics(epoch, train_loss, val_loss, val_acc, val_precision, val_recall, val_f1, current_lr)
+            if is_main_process():
+                log_epoch_metrics(
+                    epoch, train_loss, val_loss, val_acc,
+                    val_precision, val_recall, val_f1, current_lr
+                )
 
-            print(f"Epoch [{epoch + 1}/{epochs}] | "
-                  f"LR: {current_lr:.6f} | "
-                  f"Train Loss: {train_loss:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | "
-                  f"Val Acc: {val_acc:.4f} | "
-                  f"Val Precision: {val_precision:.4f} | "
-                  f"Val Recall: {val_recall:.4f} | "
-                  f"Val F1: {val_f1:.4f} | "
-                  f"Best Val F1: {best_f1:.4f} | "
-                  f"Patience: {patience_counter}/5")
+                print(
+                    f"✅ Finished Epoch [{epoch + 1}/{epochs}] | "
+                    f"LR: {current_lr:.6f} | "
+                    f"Train Loss: {train_loss:.4f} | "
+                    f"Val Loss: {val_loss:.4f} | "
+                    f"Val Acc: {val_acc:.4f} | "
+                    f"Val Precision: {val_precision:.4f} | "
+                    f"Val Recall: {val_recall:.4f} | "
+                    f"Val F1: {val_f1:.4f} | "
+                    f"Best Val F1: {best_f1:.4f} | "
+                    f"Patience: {patience_counter}/5"
+                )
 
-            # Early stopping
-            if val_f1 > best_f1 * (1 + delta):
-                best_f1 = val_f1
-                patience_counter = 0
-                torch.save({'epoch': epoch + 1,
+                # Early stopping
+                if val_f1 > best_f1 * (1 + delta):
+                    best_f1 = val_f1
+                    patience_counter = 0
+
+                    torch.save(
+                        {
+                            'epoch': epoch + 1,
                             'model_state_dict': model.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
-                            'best_f1': best_f1}, model_path)
-                log_model_artifact(model_path)
-            else:
-                patience_counter += 1
+                            'best_f1': best_f1
+                        },
+                        model_path
+                    )
+                    log_model_artifact(model_path)
+                else:
+                    patience_counter += 1
 
-            if patience_counter >= 5:
-                print("Early stopping triggered")
-                mlflow.log_param("actual_epochs", epoch + 1)
-                break
+                if patience_counter >= 5:
+                    print("Early stopping triggered")
+                    mlflow.log_param("actual_epochs", epoch + 1)
+                    break
 
-    # Test set evaluation
-    if is_main_process():
-        checkpoint = torch.load(model_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        test_loss, test_acc, test_precision, test_recall, test_f1 = validate(model, test_loader, criterion, show_report=True)
-        log_test_metrics(test_loss, test_acc, test_precision, test_recall, test_f1, best_f1)
+        # Test set evaluation
+        if is_main_process():
+            checkpoint = torch.load(model_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+
+            test_loss, test_acc, test_precision, test_recall, test_f1 = validate(
+                model, test_loader, criterion, show_report=True
+            )
+
+            log_test_metrics(
+                test_loss, test_acc, test_precision, test_recall, test_f1, best_f1
+            )
+
+    except Exception as e:
+        if is_main_process():
+            print("❌ ERROR during training:", str(e))
+            mlflow.log_param("run_failed", True)
+            mlflow.log_param("error_message", str(e))
+        raise e
+
+    finally:
+        if is_main_process():
+            print("🔚 MLflow run closed.")
+            mlflow.end_run()
