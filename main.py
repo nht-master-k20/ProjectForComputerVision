@@ -49,6 +49,8 @@ def run_task(task_name):
             import models.EfficientNetB3_v2 as module
         elif task_name == 'v3':
             import models.EfficientNetB3_v3 as module
+        elif task_name == 'v4':
+            import models.EfficientNetB3_v4 as module
         else:
             print(f"❌ Lệnh '{task_name}' không hợp lệ. Chọn: data, v1, v2, v3")
             return
