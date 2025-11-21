@@ -10,7 +10,7 @@ import numpy as np
 CONFIG = {
     "image_size": 300,
     "batch_size": 32,
-    "epochs": 20,
+    "epochs": 10 ,
     "lr": 1e-3,
     # LƯU Ý: Đổi thành 'processed' để khớp với file 'processed_train.csv' do ReadData sinh ra
     "data_mode": "processed",
@@ -65,6 +65,7 @@ def run_task(task_name):
             import models.EfficientNetB3_v3 as module
         elif task_name == 'v4':
             import models.EfficientNetB3_v4 as module
+            CONFIG['epochs'] = 20
         else:
             print(f"❌ Lệnh '{task_name}' không hợp lệ. Chọn: data, v1, v2, v3, v4")
             return
