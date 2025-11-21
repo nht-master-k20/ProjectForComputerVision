@@ -1,15 +1,20 @@
 import argparse
+import random
 import sys
 import os
+import torch
+
+import numpy as np
 
 # --- 1. CẤU HÌNH CHUNG ---
 CONFIG = {
     "image_size": 300,
     "batch_size": 32,
-    "epochs": 20,
+    "epochs": 50,
     "lr": 1e-3,
     # LƯU Ý: Đổi thành 'processed' để khớp với file 'processed_train.csv' do ReadData sinh ra
-    "data_mode": "processed"
+    "data_mode": "processed",
+    "seed": 42
 }
 
 # --- 2. SETUP PATHS ---
@@ -17,10 +22,19 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'models'))
 
 
+def seed_everything(seed):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # --- 3. XỬ LÝ CHÍNH ---
 def run_task(task_name):
     print(f"\n[MAIN] 🚀 Đang khởi chạy tác vụ: {task_name.upper()}")
-
+    seed_everything(CONFIG['seed'])
     # --- TRƯỜNG HỢP 1: CHUẨN BỊ DỮ LIỆU ---
     if task_name == 'data':
         try:
