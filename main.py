@@ -10,7 +10,7 @@ import numpy as np
 CONFIG = {
     "image_size": 300,
     "batch_size": 32,
-    "epochs": 50,
+    "epochs": 10,
     "lr": 1e-3,
     # LƯU Ý: Đổi thành 'processed' để khớp với file 'processed_train.csv' do ReadData sinh ra
     "data_mode": "processed",
