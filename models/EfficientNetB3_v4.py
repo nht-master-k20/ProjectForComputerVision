@@ -74,7 +74,11 @@ def log_training_params(image_size, batch_size, epochs, train_len, val_len, test
         "device": str(device),
         "loss_function": "BinaryFocalLoss",
         "sampler": "WeightedRandomSampler (50/50 Balance)",
+        "technique": "BiasInit + DynamicThreshold",
+        "training_type": "GPU" if torch.cuda.is_available() else "CPU"
     }
+    if class_weights is not None:
+        params.update({"cw_benign": float(class_weights[0]), "cw_malignant": float(class_weights[1])})
     mlflow.log_params(params)
 
 
