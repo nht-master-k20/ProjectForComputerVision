@@ -130,7 +130,8 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
     total_loss, count = 0.0, 0
 
     for imgs, labels in loader:
-        imgs = imgs.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+        imgs = imgs.cuda(non_blocking=True)
+        labels = labels.cuda(non_blocking=True)
 
         # [V3 UPDATE] Chuyển Labels sang Float và shape (N, 1) để khớp BCEWithLogits
         labels = labels.float().unsqueeze(1)
