@@ -66,8 +66,11 @@ def run_task(task_name):
         elif task_name == 'v4':
             import models.EfficientNetB3_v4 as module
             CONFIG['epochs'] = 20
+        elif task_name == 'v5':
+            import models.EfficientNetB3_v5 as module
+            CONFIG['epochs'] = 20
         else:
-            print(f"❌ Lệnh '{task_name}' không hợp lệ. Chọn: data, v1, v2, v3, v4")
+            print(f"❌ Lệnh '{task_name}' không hợp lệ. Chọn: data, v1, v2, v3, v4, v5")
             return
     except ImportError as e:
         print(f"❌ Lỗi Import Model {task_name}: {e}")
@@ -95,8 +98,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Simple Skin Cancer CLI')
 
     parser.add_argument('task', type=str,
-                        choices=['data', 'v1', 'v2', 'v3', 'v4'],
-                        help='Chọn tác vụ: data (xử lý ảnh), hoặc version model (v1, v2, v3, v4)')
+                        choices=['data', 'v1', 'v2', 'v3', 'v4', 'v5'],
+                        help='Chọn tác vụ: data (xử lý ảnh), hoặc version model (v1, v2, v3, v4, v5)')
 
     args = parser.parse_args()
 
