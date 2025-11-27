@@ -111,7 +111,7 @@ def validate(model, loader, criterion):
 
 
 # --- 3. MAIN (SIMPLIFIED) ---
-def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
+def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     seed_everything(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Running V1 Baseline on {device}...")
@@ -129,11 +129,11 @@ def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     print(f"📊 Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
     # Loaders
-    train_loader = DataLoader(ISICDataset(train_df, img_size, is_train=True),
+    train_loader = DataLoader(ISICDataset(train_df, image_size, is_train=True),
                               batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = DataLoader(ISICDataset(val_df, img_size, is_train=False),
+    val_loader = DataLoader(ISICDataset(val_df, image_size, is_train=False),
                             batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    test_loader = DataLoader(ISICDataset(test_df, img_size, is_train=False),
+    test_loader = DataLoader(ISICDataset(test_df, image_size, is_train=False),
                              batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     # Model Setup

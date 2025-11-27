@@ -176,7 +176,7 @@ def validate(model, loader, criterion):
 
 
 # --- 4. MAIN V3 ---
-def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
+def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     seed_everything(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Running V3 (Advanced Arch) on {device}...")
@@ -201,13 +201,13 @@ def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
 
     # Loaders
     train_loader = DataLoader(
-        ISICDataset(train_df, img_size, is_train=True),  # Online Aug ON
+        ISICDataset(train_df, image_size, is_train=True),  # Online Aug ON
         batch_size=batch_size, sampler=sampler, shuffle=False,  # Sampler ON
         num_workers=8, pin_memory=True
     )
-    val_loader = DataLoader(ISICDataset(val_df, img_size, is_train=False),
+    val_loader = DataLoader(ISICDataset(val_df, image_size, is_train=False),
                             batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    test_loader = DataLoader(ISICDataset(test_df, img_size, is_train=False),
+    test_loader = DataLoader(ISICDataset(test_df, image_size, is_train=False),
                              batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     # --- MODEL SETUP V3 ---

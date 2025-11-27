@@ -109,7 +109,7 @@ def validate(model, loader, criterion):
 
 
 # --- 3. MAIN V2 ---
-def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
+def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     seed_everything(42)  # Cố định hạt giống
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Running V2 (Sampler + CE) on {device}...")
@@ -143,16 +143,16 @@ def train(img_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     # Loaders
     # LƯU Ý: Khi dùng Sampler thì shuffle phải là False
     train_loader = DataLoader(
-        ISICDataset(train_df, img_size, is_train=True),  # Online Augmentation ON
+        ISICDataset(train_df, image_size, is_train=True),  # Online Augmentation ON
         batch_size=batch_size,
         sampler=sampler,  # Sampler ON
         shuffle=False,  # Bắt buộc False khi có Sampler
         num_workers=8, pin_memory=True
     )
 
-    val_loader = DataLoader(ISICDataset(val_df, img_size, is_train=False),
+    val_loader = DataLoader(ISICDataset(val_df, image_size, is_train=False),
                             batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    test_loader = DataLoader(ISICDataset(test_df, img_size, is_train=False),
+    test_loader = DataLoader(ISICDataset(test_df, image_size, is_train=False),
                              batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     # Model
