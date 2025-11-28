@@ -160,7 +160,8 @@ def validate(model, loader, criterion):
 
     with torch.no_grad():
         for imgs, labels in loader:
-            imgs = imgs.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+            imgs = imgs.cuda(non_blocking=True)
+            labels.cuda(non_blocking=True)
             labels_float = labels.float().unsqueeze(1)  # Chuẩn bị cho Loss
 
             outputs = model(imgs)
