@@ -70,6 +70,21 @@ def run_task(task_name):
         )
         return
 
+    if task_name == 'v5':
+        try:
+            from models import v5
+            print(f"   ⚙️ [V5 COMBO] TTA Steps: {CONFIG['tta_steps']}")
+            v5.run_v5(
+                image_size=CONFIG['image_size'],
+                batch_size=CONFIG['batch_size'],
+                tta_steps=CONFIG['tta_steps']
+            )
+        except ImportError as e:
+            print(f"❌ Lỗi Import V5: {e}")
+        except Exception as e:
+            print(f"❌ Lỗi chạy V5: {e}")
+        return
+
     print(f"❌ Tác vụ '{task_name}' không hợp lệ.")
 
 
