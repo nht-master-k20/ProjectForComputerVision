@@ -16,13 +16,6 @@ import mlflow.pytorch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.cuda.amp import GradScaler, autocast
 from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score
-
-# --- 1. FIX PATH IMPORT ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-
-# [FIX] Đảm bảo tên file là ISICDataset (bỏ số 2 nếu bạn đã đổi tên file)
 from scripts.ISICDataset2 import ISICDataset
 
 
@@ -158,11 +151,11 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Running V3 (Advanced) on {device}...")
 
+    # MLflow Setup
     os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
     os.environ["DATABRICKS_TOKEN"] = "dapif865faf65e4f29f9f213de9b6f2ffa3c"
     mlflow.set_tracking_uri("databricks")
-    # Đặt Experiment chung
-    mlflow.set_experiment("/SkinDisease_Experiment")
+    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/v3")
 
     CSV_DIR = os.path.join(parent_dir, 'dataset_splits')
     try:
