@@ -203,9 +203,8 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
         log_training_params("V3_Advanced", batch_size, epochs, base_lr)
 
         best_pauc = -1
-        ckpt_dir = os.path.join(parent_dir, 'checkpoints')
-        os.makedirs(ckpt_dir, exist_ok=True)
-        model_path = os.path.join(ckpt_dir, "best_v3.pth")
+        model_path = "checkpoints/best_v3.pth"
+        os.makedirs("checkpoints", exist_ok=True)
 
         for epoch in range(epochs):
             lr = optimizer.param_groups[0]['lr']
