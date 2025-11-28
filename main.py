@@ -16,6 +16,7 @@ CONFIG = {
     "epochs": 10,
     "lr": 1e-3,
     "tta_steps": 5,
+    "threshold": 0.07,
     "seed": 42
 }
 
@@ -36,7 +37,7 @@ def run_task(task_name):
     seed_everything(CONFIG['seed'])
 
     if task_name == 'data':
-        from scripts.prepare_data import ReadData
+        from scripts.ReadData2 import ReadData
         print(f"   ⚙️ [DATA] Running Clean -> Resize -> Split")
         ReadData.run()
         return
@@ -64,7 +65,8 @@ def run_task(task_name):
         v4.run_tta(
             image_size=CONFIG['image_size'],
             batch_size=CONFIG['batch_size'],
-            tta_steps=CONFIG['tta_steps']
+            tta_steps=CONFIG['tta_steps'],
+            threshold=CONFIG['threshold']
         )
         return
 
