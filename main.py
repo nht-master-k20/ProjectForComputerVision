@@ -90,6 +90,6 @@ def run_task(task_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('task', type=str, choices=['data', 'v1', 'v2', 'v3', 'v4'])
+    parser.add_argument('task', type=str, choices=['data', 'v1', 'v2', 'v3', 'v4', 'v5'])
     args = parser.parse_args()
     run_task(args.task)
