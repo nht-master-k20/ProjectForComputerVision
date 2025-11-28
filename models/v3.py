@@ -157,15 +157,10 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     mlflow.set_tracking_uri("databricks")
     mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/v3")
 
-    CSV_DIR = os.path.join(parent_dir, 'dataset_splits')
-    try:
-        train_df = pd.read_csv(f'{CSV_DIR}/processed_train.csv')
-        val_df = pd.read_csv(f'{CSV_DIR}/processed_val.csv')
-        test_df = pd.read_csv(f'{CSV_DIR}/processed_test.csv')
-    except FileNotFoundError:
-        print("❌ Error: CSV files not found.")
-        return
-
+    CSV_DIR = 'dataset_splits'
+    train_df = pd.read_csv(f'{CSV_DIR}/processed_train.csv')
+    val_df = pd.read_csv(f'{CSV_DIR}/processed_val.csv')
+    test_df = pd.read_csv(f'{CSV_DIR}/processed_test.csv')
     print(f"📊 Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
     # Sampler
@@ -196,9 +191,8 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
         log_training_params("V3_Advanced", batch_size, epochs, base_lr)
 
         best_pauc = -1
-        ckpt_dir = os.path.join(parent_dir, 'checkpoints')
-        os.makedirs(ckpt_dir, exist_ok=True)
-        model_path = os.path.join(ckpt_dir, "best_v3.pth")
+        model_path = "checkpoints/best_v3.pth"
+        os.makedirs("checkpoints", exist_ok=True)
 
         for epoch in range(epochs):
             lr = optimizer.param_groups[0]['lr']
