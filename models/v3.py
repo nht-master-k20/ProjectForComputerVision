@@ -23,7 +23,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 # [FIX] Đảm bảo tên file là ISICDataset (bỏ số 2 nếu bạn đã đổi tên file)
-from scripts.ISICDataset import ISICDataset
+from scripts.ISICDataset2 import ISICDataset
 
 
 # --- 0. SEED CONTROL ---
