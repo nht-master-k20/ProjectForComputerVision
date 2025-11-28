@@ -3,6 +3,7 @@
 # Vì đã dùng Sampler (cân bằng số lượng 50/50), Focal Loss ở đây đóng vai trò tập trung vào "Hard Examples" (những ca khó phân biệt) thay vì cân bằng dữ liệu.
 # Bias Initialization: Khởi tạo bias lớp cuối cùng để output ban đầu của model có xác suất ~1% (prior probability). Điều này giúp Loss không bị "nổ" (explosion) ở những epoch đầu, giúp model hội tụ mượt hơn.
 
+import sys
 import os
 import random
 import numpy as np
@@ -13,8 +14,10 @@ import timm
 import mlflow
 import mlflow.pytorch
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score
+
+# Import Dataset
 from scripts.ISICDataset2 import ISICDataset
 
 
@@ -29,14 +32,8 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-# --- 1. CUSTOM COMPONENTS (V3 SPECIALS) ---
-
+# --- 1. COMPONENTS ---
 class BinaryFocalLoss(nn.Module):
-    """
-    Loss chuyên dụng cho bài toán 1 Output Node.
-    Kết hợp BCEWithLogitsLoss và cơ chế Focal (alpha, gamma).
-    """
-
     def __init__(self, alpha=0.5, gamma=2.0, reduction='mean'):
         super().__init__()
         self.alpha = alpha
@@ -44,15 +41,12 @@ class BinaryFocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        # inputs: Logits (chưa qua sigmoid)
-        # targets: 0 hoặc 1 (float)
+        # targets phải ở cùng device với inputs
+        targets = targets.to(inputs.device)
+
         bce_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-        pt = torch.exp(-bce_loss)  # pt là xác suất dự đoán đúng
-
-        # Alpha balancing: Vì đã dùng Sampler cân bằng 50/50, ta để alpha=0.5 (cân bằng)
-        # hoặc có thể bỏ qua term alpha_t. Ở đây giữ lại để loss linh hoạt.
+        pt = torch.exp(-bce_loss)
         alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-
         focal_loss = alpha_t * (1 - pt) ** self.gamma * bce_loss
 
         if self.reduction == 'mean':
@@ -64,47 +58,19 @@ class BinaryFocalLoss(nn.Module):
 
 
 def initialize_bias(model, device):
-    """
-    Khởi tạo Bias lớp cuối sao cho xác suất output ban đầu thấp (prior=0.01).
-    Tránh Loss quá lớn ở epoch đầu tiên.
-    """
     prior = 0.01
-    # Công thức nghịch đảo Sigmoid: b = -log((1-p)/p)
     bias_value = -np.log((1 - prior) / prior)
-
-    # Tìm lớp classifier cuối cùng của EfficientNet
-    if hasattr(model, 'classifier'):
-        layer = model.classifier
-    elif hasattr(model, 'fc'):
-        layer = model.fc
-    else:
-        return model  # Không tìm thấy thì bỏ qua
-
-    # Chỉ khởi tạo nếu là Linear Layer
-    if isinstance(layer, nn.Linear):
+    if hasattr(model, 'classifier') and isinstance(model.classifier, nn.Linear):
         with torch.no_grad():
-            layer.bias.data.fill_(bias_value)
-            print(f"🔧 Bias Initialized to {bias_value:.4f} (Prior prob ~ {prior * 100}%)")
+            model.classifier.bias.data.fill_(bias_value)
+            print(f"🔧 Bias Initialized to {bias_value:.4f}")
+    elif hasattr(model, 'fc') and isinstance(model.fc, nn.Linear):
+        with torch.no_grad():
+            model.fc.bias.data.fill_(bias_value)
+            print(f"🔧 Bias Initialized to {bias_value:.4f}")
 
     model.to(device)
     return model
-
-
-# --- 2. LOGGING ---
-def log_training_params(version, batch_size, epochs, lr):
-    params = {
-        "version": version,
-        "model": "EfficientNet-B3 (Binary Node)",
-        "loss_function": "BinaryFocalLoss (Gamma=2.0)",
-        "sampler": "WeightedRandomSampler",
-        "init_strategy": "Bias Initialization (p=0.01)",
-        "augmentation": "Online (Albumentations)",
-        "batch_size": batch_size,
-        "epochs": epochs,
-        "learning_rate": lr,
-        "metric_target": "pAUC (0.01)"
-    }
-    mlflow.log_params(params)
 
 
 def calculate_metrics(y_true, y_probs, threshold=0.5):
@@ -124,22 +90,33 @@ def calculate_metrics(y_true, y_probs, threshold=0.5):
     }
 
 
-# --- 3. TRAINING CORE (UPDATED FOR BINARY) ---
+def log_training_params(version, batch_size, epochs, lr):
+    params = {
+        "version": version,
+        "loss": "BinaryFocalLoss",
+        "sampler": "WeightedRandomSampler",
+        "metric": "pAUC (0.01)"
+    }
+    mlflow.log_params(params)
+
+
+# --- 2. TRAIN STEP ---
 def train_one_epoch(model, loader, optimizer, criterion, scaler):
     model.train()
     total_loss, count = 0.0, 0
 
     for imgs, labels in loader:
+        # [QUAN TRỌNG] Gán lại biến sau khi gọi .cuda()
         imgs = imgs.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
 
-        # [V3 UPDATE] Chuyển Labels sang Float và shape (N, 1) để khớp BCEWithLogits
-        labels = labels.float().unsqueeze(1)
+        # Chuyển label sang float (N, 1) - Lúc này labels đã ở trên GPU nên labels_float cũng sẽ ở GPU
+        labels_float = labels.float().unsqueeze(1)
 
         optimizer.zero_grad()
-        with autocast(device_type='cuda'):
-            outputs = model(imgs)  # Output shape (N, 1)
-            loss = criterion(outputs, labels)
+        with autocast():
+            outputs = model(imgs)
+            loss = criterion(outputs, labels_float)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -160,43 +137,43 @@ def validate(model, loader, criterion):
 
     with torch.no_grad():
         for imgs, labels in loader:
+            # [FIX LỖI DEVICE CPU/CUDA Ở ĐÂY]
             imgs = imgs.cuda(non_blocking=True)
-            labels.cuda(non_blocking=True)
-            labels_float = labels.float().unsqueeze(1)  # Chuẩn bị cho Loss
+            labels = labels.cuda(non_blocking=True)  # <-- Phải gán lại vào labels
 
-            outputs = model(imgs)
-            loss = criterion(outputs, labels_float)
+            # labels đang ở GPU -> labels_float sẽ ở GPU
+            labels_float = labels.float().unsqueeze(1)
+
+            outputs = model(imgs)  # outputs ở GPU
+            loss = criterion(outputs, labels_float)  # Cả 2 đều ở GPU -> OK
             total_loss += loss.item()
 
-            # [V3 UPDATE] Dùng Sigmoid (vì num_classes=1)
             probs = torch.sigmoid(outputs).cpu().numpy().flatten()
-
             all_probs.extend(probs)
             all_labels.extend(labels.cpu().numpy())
 
     return total_loss / max(1, len(loader)), np.array(all_labels), np.array(all_probs)
 
 
-# --- 4. MAIN V3 ---
+# --- 3. MAIN TRAIN ---
 def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     seed_everything(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🖥️ Running V3 (Advanced Arch) on {device}...")
+    print(f"🖥️ Running V3 (Advanced) on {device}...")
 
     # MLflow Setup
     os.environ["DATABRICKS_HOST"] = "https://dbc-cba55001-5dea.cloud.databricks.com"
     os.environ["DATABRICKS_TOKEN"] = "dapif865faf65e4f29f9f213de9b6f2ffa3c"
     mlflow.set_tracking_uri("databricks")
-    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/v3")
+    mlflow.set_experiment("/Workspace/Users/nht.master.k20@gmail.com/v2")
 
-    # Paths
     CSV_DIR = 'dataset_splits'
     train_df = pd.read_csv(f'{CSV_DIR}/processed_train.csv')
     val_df = pd.read_csv(f'{CSV_DIR}/processed_val.csv')
     test_df = pd.read_csv(f'{CSV_DIR}/processed_test.csv')
     print(f"📊 Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
-    # --- SAMPLER SETUP (Vẫn giữ từ V2) ---
+    # Sampler Setup
     print("⚖️ Configuring Sampler...")
     y_train = train_df['malignant'].values.astype(int)
     class_counts = np.bincount(y_train)
@@ -204,28 +181,20 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
     sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
 
     # Loaders
-    train_loader = DataLoader(
-        ISICDataset(train_df, image_size, is_train=True),  # Online Aug ON
-        batch_size=batch_size, sampler=sampler, shuffle=False,  # Sampler ON
-        num_workers=8, pin_memory=True
-    )
+    train_loader = DataLoader(ISICDataset(train_df, image_size, is_train=True),
+                              batch_size=batch_size, sampler=sampler, shuffle=False,
+                              num_workers=8, pin_memory=True)
     val_loader = DataLoader(ISICDataset(val_df, image_size, is_train=False),
                             batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
     test_loader = DataLoader(ISICDataset(test_df, image_size, is_train=False),
                              batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
-    # --- MODEL SETUP V3 ---
-    # [V3 UPDATE] num_classes=1 (Binary Mode)
+    # Model
     model = timm.create_model("tf_efficientnet_b3.ns_jft_in1k", pretrained=True, num_classes=1)
-
-    # [V3 UPDATE] Bias Initialization
     model = initialize_bias(model, device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=0.01)
-
-    # [V3 UPDATE] Binary Focal Loss
     criterion = BinaryFocalLoss(alpha=0.5, gamma=2.0)
-
     scaler = GradScaler()
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
@@ -234,16 +203,23 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
         log_training_params("V3_Advanced", batch_size, epochs, base_lr)
 
         best_pauc = -1
-        model_path = "checkpoints/best_v3.pth"
-        os.makedirs("checkpoints", exist_ok=True)
+        ckpt_dir = os.path.join(parent_dir, 'checkpoints')
+        os.makedirs(ckpt_dir, exist_ok=True)
+        model_path = os.path.join(ckpt_dir, "best_v3.pth")
 
         for epoch in range(epochs):
             lr = optimizer.param_groups[0]['lr']
+
+            # Train step
+            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
+
+            # [FIX CẢNH BÁO SCHEDULER] Gọi step() sau khi train xong epoch
             scheduler.step()
 
-            train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
+            # Validation step
             val_loss, val_labels, val_probs = validate(model, val_loader, criterion)
 
+            # Metrics
             metrics = calculate_metrics(val_labels, val_probs)
             current_pauc = metrics['pauc_0.01']
 
@@ -258,17 +234,16 @@ def train(image_size=300, batch_size=32, epochs=10, base_lr=1e-3):
                 torch.save(model.state_dict(), model_path)
                 print(f"  🔥 Saved Best Model (pAUC: {best_pauc:.4f})")
 
-        # Final Test
-        print("\n🧪 Testing Best Model V3 (Single View)...")
-        model.load_state_dict(torch.load(model_path))
-        test_loss, test_labels, test_probs = validate(model, test_loader, criterion)
-        test_metrics = calculate_metrics(test_labels, test_probs)
+        # Test
+        print("\n🧪 Testing Best Model V3...")
+        if os.path.exists(model_path):
+            model.load_state_dict(torch.load(model_path))
+            test_loss, test_labels, test_probs = validate(model, test_loader, criterion)
+            test_metrics = calculate_metrics(test_labels, test_probs)
 
-        print(f"🏆 FINAL TEST V3 pAUC: {test_metrics['pauc_0.01']:.4f}")
-        print(classification_report(test_labels, (test_probs >= 0.5).astype(int), target_names=['Benign', 'Malignant']))
-
-        mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
-
-
-if __name__ == '__main__':
-    train()
+            print(f"🏆 FINAL TEST V3 pAUC: {test_metrics['pauc_0.01']:.4f}")
+            print(classification_report(test_labels, (test_probs >= 0.5).astype(int),
+                                        target_names=['Benign', 'Malignant']))
+            mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
+        else:
+            print("⚠️ Warning: Model checkpoint not found.")
